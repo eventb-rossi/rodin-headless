@@ -44,7 +44,7 @@ ARG RODIN_VERSION=latest
 ARG RODIN_TARBALL=
 
 COPY --chmod=755 rodin-version.sh prob-version.sh /tmp/
-COPY --chmod=755 rodin-headless-build.sh /usr/local/bin/rodin-headless-build.sh
+COPY --chmod=755 rodin-headless-build.sh entrypoint.sh /usr/local/bin/
 
 RUN if [ -z "$RODIN_TARBALL" ]; then \
         eval "$(/tmp/rodin-version.sh "$RODIN_VERSION")"; \
@@ -93,4 +93,4 @@ ENV RODIN_DIR=/opt/rodin
 ENV MODELS_DIR=/models
 
 WORKDIR /models
-ENTRYPOINT ["rodin-headless-build.sh"]
+ENTRYPOINT ["entrypoint.sh"]

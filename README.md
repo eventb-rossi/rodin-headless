@@ -11,18 +11,39 @@ docker run --rm -v "$(pwd):/models" rodin-headless my-model.zip
 
 The built artifacts are written back into the zip in-place.
 
-## Usage
-
-### Build all models in a directory
+## Commands
 
 ```bash
-docker run --rm -v /path/to/models:/models rodin-headless
+docker run --rm -v "$(pwd):/models" rodin-headless <command> [args...]
 ```
 
-### Build specific models
+| Command | Description |
+|---------|-------------|
+| `build [zips...]` | Build Event-B models with Rodin (default) |
+| `check <file> [opts...]` | Model-check with ProB (`probcli -mc 1000`) |
+| `probcli [args...]` | Run probcli directly with arbitrary arguments |
+| `help` | Show available commands |
+
+If no command is given, `build` is assumed (backward compatible).
+
+### Build models
 
 ```bash
-docker run --rm -v "$(pwd):/models" rodin-headless model1.zip model2.zip
+# Build all .zip models in a directory
+docker run --rm -v /path/to/models:/models rodin-headless
+
+# Build specific models
+docker run --rm -v "$(pwd):/models" rodin-headless build model1.zip model2.zip
+```
+
+### Model check with ProB
+
+```bash
+# Quick model check (1000 states)
+docker run --rm -v "$(pwd):/models" rodin-headless check my-project/M1.bum
+
+# Custom probcli invocation
+docker run --rm -v "$(pwd):/models" rodin-headless probcli my-project/M1.bum -mc 5000 -nodead
 ```
 
 ### SELinux / Podman
@@ -97,16 +118,11 @@ The `rodin-version.sh` helper script can also be used standalone to query availa
 
 ## ProB
 
-The image includes [ProB](https://prob.hhu.de/) for model checking and animation. The `probcli` command-line tool is available on PATH:
+The image includes [ProB](https://prob.hhu.de/) for model checking and animation:
 
 ```bash
-# Model check an Event-B machine
-docker run --rm -v "$(pwd):/models" --entrypoint probcli rodin-headless \
-  /models/my-project/M1.bum -mc 1000
-
-# Constraint-based deadlock check
-docker run --rm -v "$(pwd):/models" --entrypoint probcli rodin-headless \
-  /models/my-project/M1.bum -cbc_deadlock
+docker run --rm -v "$(pwd):/models" rodin-headless check my-project/M1.bum
+docker run --rm -v "$(pwd):/models" rodin-headless probcli my-project/M1.bum -cbc_deadlock
 ```
 
 The ProB Rodin plugin (core, disprover, symbolic) is also installed, making ProB available during Rodin workspace builds.

@@ -167,6 +167,7 @@ import org.eventb.core.*;
 import de.prob.core.Animator;
 import de.prob.core.command.*;
 import de.prob.prolog.term.CompoundPrologTerm;
+import org.eventb.core.seqprover.IConfidence;
 import java.io.File;
 import java.util.*;
 
@@ -203,12 +204,74 @@ public class HeadlessBuilder implements IApplication {
         System.out.println("Build complete.");
 
         String mode = System.getProperty("rodinbuilder.mode", "build");
-        if (!"build".equals(mode)) {
+        if ("autoprove".equals(mode)) {
+            boolean ok = runAutoProver(root);
+            if (!ok) return Integer.valueOf(1);
+        } else if (!"build".equals(mode)) {
             boolean ok = runProBValidation(root, mode);
             if (!ok) return Integer.valueOf(1);
         }
 
         return IApplication.EXIT_OK;
+    }
+
+    private boolean runAutoProver(IWorkspaceRoot root) throws Exception {
+        boolean allProved = true;
+
+        for (IProject project : root.getProjects()) {
+            if (!project.isOpen()) continue;
+            IRodinProject rp = RodinCore.valueOf(project);
+
+            // Process both machines and contexts (both can have POs)
+            List<IEventBRoot> components = new ArrayList<>();
+            for (IMachineRoot m : rp.getRootElementsOfType(IMachineRoot.ELEMENT_TYPE))
+                components.add(m);
+            for (IContextRoot c : rp.getRootElementsOfType(IContextRoot.ELEMENT_TYPE))
+                components.add(c);
+
+            for (IEventBRoot component : components) {
+                IPSRoot psRoot = component.getPSRoot();
+                if (!psRoot.exists()) continue;
+                String name = component.getComponentName();
+
+                try {
+                    IPSStatus[] allStatuses = psRoot.getStatuses();
+                    Set<IPSStatus> undischarged = new HashSet<>();
+                    for (IPSStatus s : allStatuses) {
+                        if (s.getConfidence() <= IConfidence.PENDING) {
+                            undischarged.add(s);
+                        }
+                    }
+
+                    System.out.println("\n=== Auto-prove: " + name + " ===");
+                    System.out.println("  Total POs: " + allStatuses.length
+                        + ", undischarged: " + undischarged.size());
+
+                    if (!undischarged.isEmpty()) {
+                        EventBPlugin.runAutoProver(undischarged, new NullProgressMonitor());
+                    }
+
+                    // Re-read and report results
+                    int discharged = 0;
+                    IPSStatus[] updatedStatuses = psRoot.getStatuses();
+                    for (IPSStatus s : updatedStatuses) {
+                        if (s.getConfidence() > IConfidence.PENDING) discharged++;
+                    }
+                    System.out.println("  Discharged: " + discharged + "/" + updatedStatuses.length);
+                    if (discharged < updatedStatuses.length) allProved = false;
+                } catch (Exception e) {
+                    System.err.println("  Auto-prove error on " + name + ": " + e.getMessage());
+                    allProved = false;
+                }
+            }
+        }
+
+        if (allProved) {
+            System.out.println("\nAuto-prover: ALL PROOF OBLIGATIONS DISCHARGED");
+        } else {
+            System.out.println("\nAuto-prover: SOME PROOF OBLIGATIONS REMAIN");
+        }
+        return allProved;
     }
 
     private boolean runProBValidation(IWorkspaceRoot root, String mode) throws Exception {
@@ -315,6 +378,7 @@ Require-Bundle: org.eclipse.core.resources,
  org.eclipse.equinox.app,
  de.prob.core,
  org.eventb.core,
+ org.eventb.core.seqprover,
  org.rodinp.core
 Bundle-RequiredExecutionEnvironment: JavaSE-21
 MF
@@ -332,6 +396,7 @@ CP="$CP:$(resolve_jar org.eclipse.core.jobs)"
 CP="$CP:$(resolve_jar org.eclipse.osgi)"
 CP="$CP:$(resolve_jar org.eventb.core)"
 CP="$CP:$(resolve_jar org.rodinp.core)"
+CP="$CP:$(resolve_jar org.eventb.core.seqprover)"
 PROB_CORE_DIR=$(resolve_dir de.prob.core)
 CP="$CP:$PROB_CORE_DIR"
 # de.prob.core has nested JARs in lib/dependencies/

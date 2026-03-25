@@ -13,9 +13,10 @@
 # - Rodin IDE installed (Eclipse-based)
 # - Java 21+ (for compiling the OSGi plugin)
 #
-# Usage: ./rodin-headless-build.sh [<rodin-dir> <models-dir>] [model1.zip model2.zip ...]
+# Usage: ./rodin-headless-build.sh [--mode MODE] [<rodin-dir> <models-dir>] [model1.zip ...]
 #   If no specific models are listed, all .zip files in models-dir are processed.
 #   Paths can also be set via RODIN_DIR and MODELS_DIR environment variables.
+#   MODE: build (default), check, prove, validate
 #
 # Examples:
 #   ./rodin-headless-build.sh /home/work/bin/rodin . evbt_bridge.zip evbt_elevator.zip
@@ -23,6 +24,13 @@
 #   docker run --rm -v "$(pwd):/models" rodin-headless model.zip
 
 set -euo pipefail
+
+# Parse --mode flag
+BUILD_MODE="build"
+if [ "${1:-}" = "--mode" ]; then
+    BUILD_MODE="${2:-build}"
+    shift 2
+fi
 
 # Auto-start virtual framebuffer if no display is available (e.g., Docker)
 if [ -z "${DISPLAY:-}" ] && command -v Xvfb >/dev/null 2>&1; then
@@ -154,7 +162,13 @@ import org.eclipse.core.resources.*;
 import org.eclipse.core.runtime.*;
 import org.eclipse.equinox.app.IApplication;
 import org.eclipse.equinox.app.IApplicationContext;
+import org.rodinp.core.*;
+import org.eventb.core.*;
+import de.prob.core.Animator;
+import de.prob.core.command.*;
+import de.prob.prolog.term.CompoundPrologTerm;
 import java.io.File;
+import java.util.*;
 
 public class HeadlessBuilder implements IApplication {
     @Override
@@ -188,7 +202,89 @@ public class HeadlessBuilder implements IApplication {
         workspace.build(IncrementalProjectBuilder.FULL_BUILD, new NullProgressMonitor());
         System.out.println("Build complete.");
 
+        String mode = System.getProperty("rodinbuilder.mode", "build");
+        if (!"build".equals(mode)) {
+            boolean ok = runProBValidation(root, mode);
+            if (!ok) return Integer.valueOf(1);
+        }
+
         return IApplication.EXIT_OK;
+    }
+
+    private boolean runProBValidation(IWorkspaceRoot root, String mode) throws Exception {
+        Animator animator = Animator.getAnimator();
+        boolean allPassed = true;
+
+        for (IProject project : root.getProjects()) {
+            if (!project.isOpen()) continue;
+            IRodinProject rp = RodinCore.valueOf(project);
+            IMachineRoot[] machines = rp.getRootElementsOfType(IMachineRoot.ELEMENT_TYPE);
+
+            for (IMachineRoot machine : machines) {
+                String name = machine.getComponentName();
+                System.out.println("\n=== ProB: " + name + " ===");
+
+                try {
+                    LoadEventBModelCommand.load(animator, machine);
+                    StartAnimationCommand.start(animator);
+
+                    if ("check".equals(mode)) {
+                        System.out.println("  Model checking (1000 states)...");
+                        ModelCheckingCommand.modelcheck(animator, 1000, Collections.emptyList());
+                        System.out.println("  Model check complete.");
+                    }
+
+                    if ("prove".equals(mode) || "validate".equals(mode)) {
+                        System.out.println("  CBC invariant checking...");
+                        List<String> events = new ArrayList<>();
+                        for (IEvent e : machine.getEvents()) {
+                            String label = e.getLabel();
+                            if (!"INITIALISATION".equals(label)) events.add(label);
+                        }
+                        ConstraintBasedInvariantCheckCommand invCmd =
+                            new ConstraintBasedInvariantCheckCommand(events);
+                        animator.execute(invCmd);
+                        System.out.println("  Invariant CBC: " + invCmd.getResult());
+                        if (invCmd.getResult() == ConstraintBasedInvariantCheckCommand.ResultType.VIOLATION_FOUND) {
+                            allPassed = false;
+                        }
+                    }
+
+                    if ("validate".equals(mode)) {
+                        System.out.println("  CBC deadlock checking...");
+                        ConstraintBasedDeadlockCheckCommand dlCmd =
+                            new ConstraintBasedDeadlockCheckCommand(new CompoundPrologTerm("truth"));
+                        animator.execute(dlCmd);
+                        System.out.println("  Deadlock CBC: " + dlCmd.getResult());
+                        if (dlCmd.getResult() == ConstraintBasedDeadlockCheckCommand.ResultType.DEADLOCK_FOUND) {
+                            allPassed = false;
+                        }
+
+                        System.out.println("  CBC assertion checking...");
+                        ConstraintBasedAssertionCheckCommand assCmd =
+                            new ConstraintBasedAssertionCheckCommand();
+                        animator.execute(assCmd);
+                        System.out.println("  Assertion CBC: " + assCmd.getResult());
+                        if (assCmd.getResult() == ConstraintBasedAssertionCheckCommand.ResultType.COUNTER_EXAMPLE) {
+                            allPassed = false;
+                        }
+                    }
+                } catch (Exception e) {
+                    System.err.println("  ProB error on " + name + ": " + e.getMessage());
+                    allPassed = false;
+                }
+                // Reset ProB for the next machine
+                try { Animator.killAndReload(); } catch (Exception ignored) {}
+                animator = Animator.getAnimator();
+            }
+        }
+
+        if (allPassed) {
+            System.out.println("\nProB validation: ALL CHECKS PASSED");
+        } else {
+            System.out.println("\nProB validation: FAILURES DETECTED");
+        }
+        return allPassed;
     }
 
     @Override
@@ -216,20 +312,32 @@ Bundle-SymbolicName: rodinbuilder;singleton:=true
 Bundle-Version: 1.0.0
 Require-Bundle: org.eclipse.core.resources,
  org.eclipse.core.runtime,
- org.eclipse.equinox.app
+ org.eclipse.equinox.app,
+ de.prob.core,
+ org.eventb.core,
+ org.rodinp.core
 Bundle-RequiredExecutionEnvironment: JavaSE-21
 MF
 
-# Compile against Rodin's Eclipse JARs
+# Compile against Rodin's Eclipse and plugin JARs
 resolve_jar() { ls "$RODIN_PLUGINS"/$1_*.jar 2>/dev/null | tail -1; }
-RESOURCES_JAR=$(resolve_jar org.eclipse.core.resources)
-RUNTIME_JAR=$(resolve_jar org.eclipse.core.runtime)
-EQUINOX_APP_JAR=$(resolve_jar org.eclipse.equinox.app)
-EQUINOX_COMMON_JAR=$(resolve_jar org.eclipse.equinox.common)
-JOBS_JAR=$(resolve_jar org.eclipse.core.jobs)
-OSGI_JAR=$(resolve_jar org.eclipse.osgi)
+# de.prob.core is extracted as a directory, not a JAR
+resolve_dir() { ls -d "$RODIN_PLUGINS"/$1_*/ 2>/dev/null | tail -1; }
 
-CP="$RESOURCES_JAR:$RUNTIME_JAR:$EQUINOX_APP_JAR:$EQUINOX_COMMON_JAR:$JOBS_JAR:$OSGI_JAR"
+CP=$(resolve_jar org.eclipse.core.resources)
+CP="$CP:$(resolve_jar org.eclipse.core.runtime)"
+CP="$CP:$(resolve_jar org.eclipse.equinox.app)"
+CP="$CP:$(resolve_jar org.eclipse.equinox.common)"
+CP="$CP:$(resolve_jar org.eclipse.core.jobs)"
+CP="$CP:$(resolve_jar org.eclipse.osgi)"
+CP="$CP:$(resolve_jar org.eventb.core)"
+CP="$CP:$(resolve_jar org.rodinp.core)"
+PROB_CORE_DIR=$(resolve_dir de.prob.core)
+CP="$CP:$PROB_CORE_DIR"
+# de.prob.core has nested JARs in lib/dependencies/
+for jar in "${PROB_CORE_DIR}lib/dependencies"/*.jar; do
+    [ -f "$jar" ] && CP="$CP:$jar"
+done
 
 javac -cp "$CP" "$PLUGIN_DIR/rodinbuilder/HeadlessBuilder.java"
 jar cfm "$PLUGIN_DIR/rodinbuilder.jar" "$PLUGIN_DIR/META-INF/MANIFEST.MF" \
@@ -250,7 +358,7 @@ fi
 # Build the Rodin launch command (prefer equinox launcher JAR over native binary)
 LAUNCHER_JAR=$(resolve_jar org.eclipse.equinox.launcher)
 if [ -n "$LAUNCHER_JAR" ]; then
-    RODIN_CMD=(java -jar "$LAUNCHER_JAR" -install "$RODIN_DIR")
+    RODIN_CMD=(java "-Drodinbuilder.mode=$BUILD_MODE" -jar "$LAUNCHER_JAR" -install "$RODIN_DIR")
 else
     RODIN_CMD=("$RODIN_DIR/rodin")
 fi
@@ -259,7 +367,8 @@ fi
     -nosplash -clean \
     -application rodinbuilder.headlessBuilder \
     -data "$WORKSPACE" \
-    -consolelog 2>&1 | grep -v "^\s*at " | grep -v "^\.\.\." | grep -v "^$" || true
+    -consolelog \
+    2>&1 | grep -v "^\s*at " | grep -v "^\.\.\." | grep -v "^$" || true
 echo
 
 # --- Step 4: Check results and repackage ---

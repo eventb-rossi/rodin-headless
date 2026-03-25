@@ -62,7 +62,9 @@ export RODIN_DIR=/opt/rodin MODELS_DIR=./models
 |-----------|---------|
 | Base image | `eclipse-temurin:21-jdk-jammy` |
 | Rodin | auto-detected latest stable (currently 3.9) |
-| Image size | ~750 MB |
+| ProB CLI | 1.15.1 |
+| ProB Rodin plugin | 3.2.1 (core, disprover, symbolic) |
+| Image size | ~900 MB |
 
 ### Rodin Version Selection
 
@@ -92,6 +94,22 @@ The `rodin-version.sh` helper script can also be used standalone to query availa
 ./rodin-version.sh --rc         # latest RC
 ./rodin-version.sh --version 3.8
 ```
+
+## ProB
+
+The image includes [ProB](https://prob.hhu.de/) for model checking and animation. The `probcli` command-line tool is available on PATH:
+
+```bash
+# Model check an Event-B machine
+docker run --rm -v "$(pwd):/models" --entrypoint probcli rodin-headless \
+  /models/my-project/M1.bum -mc 1000
+
+# Constraint-based deadlock check
+docker run --rm -v "$(pwd):/models" --entrypoint probcli rodin-headless \
+  /models/my-project/M1.bum -cbc_deadlock
+```
+
+The ProB Rodin plugin (core, disprover, symbolic) is also installed, making ProB available during Rodin workspace builds.
 
 ## Model Archive Format
 

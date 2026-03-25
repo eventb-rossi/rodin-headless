@@ -43,7 +43,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ARG RODIN_VERSION=latest
 ARG RODIN_TARBALL=
 
-COPY --chmod=755 rodin-version.sh /tmp/rodin-version.sh
+COPY --chmod=755 rodin-version.sh prob-version.sh /tmp/
 COPY --chmod=755 rodin-headless-build.sh /usr/local/bin/rodin-headless-build.sh
 
 RUN if [ -z "$RODIN_TARBALL" ]; then \
@@ -59,6 +59,34 @@ RUN if [ -z "$RODIN_TARBALL" ]; then \
     && rm /tmp/rodin.tar.gz /tmp/rodin-version.sh \
     && chmod +x /opt/rodin/rodin \
     && sed -i '1i -vm\n/opt/java/openjdk/bin' /opt/rodin/rodin.ini
+
+# ── Install ProB (CLI + Rodin plugin) ────────────────────────────
+# PROB_VERSION: "latest" (default) or a specific version like "1.15.1"
+ARG PROB_VERSION=latest
+
+# ProB plugin requires org.eclipse.gef which is not in Rodin's base install.
+# The matching Eclipse release site provides version-compatible GEF.
+# Eclipse version is read from Rodin's .eclipseproduct and mapped to a release name
+# using the quarterly cadence: 4.24=2022-06, each +1 minor = +3 months.
+RUN eval "$(/tmp/prob-version.sh "$PROB_VERSION")" \
+    && echo "Installing ProB $PROB_VERSION" \
+    && curl -fSL --retry 3 --retry-delay 5 --max-time 300 \
+        -o /tmp/prob.tar.gz "$PROB_URL" \
+    && mkdir -p /opt/prob \
+    && tar xzf /tmp/prob.tar.gz -C /opt/prob --strip-components=1 \
+    && rm /tmp/prob.tar.gz /tmp/prob-version.sh \
+    && ln -s /opt/prob/probcli /usr/local/bin/probcli \
+    && ECLIPSE_MINOR=$(grep '^version=' /opt/rodin/.eclipseproduct | cut -d. -f2) \
+    && OFFSET=$(( ECLIPSE_MINOR - 24 )) \
+    && TOTAL_MONTHS=$(( 5 + OFFSET * 3 )) \
+    && ECLIPSE_RELEASE="$(( 2022 + TOTAL_MONTHS / 12 ))-$(printf "%02d" $(( TOTAL_MONTHS % 12 + 1 )))" \
+    && echo "Using Eclipse release $ECLIPSE_RELEASE for dependencies (platform 4.$ECLIPSE_MINOR)" \
+    && java -jar /opt/rodin/plugins/org.eclipse.equinox.launcher_*.jar \
+        -nosplash \
+        -application org.eclipse.equinox.p2.director \
+        -repository "https://stups.hhu-hosting.de/rodin/prob1/release/,https://download.eclipse.org/releases/$ECLIPSE_RELEASE/" \
+        -installIU de.prob2.feature.feature.group,de.prob2.disprover.feature.feature.group,de.prob2.symbolic.feature.feature.group \
+        -destination /opt/rodin
 
 # ── Runtime configuration ──────────────────────────────────────────
 ENV RODIN_DIR=/opt/rodin

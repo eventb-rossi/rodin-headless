@@ -1,0 +1,9 @@
+.git
+*.zip
+Dockerfile
+.dockerignore
+*.swp
+*~
+.vscode/
+.idea/
+.claude/

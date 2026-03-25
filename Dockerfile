@@ -3,11 +3,8 @@ FROM docker.io/eclipse-temurin:21-jdk-noble
 LABEL description="Rodin Event-B IDE headless builder"
 
 # ── System dependencies ─────────────────────────────────────────────
-# GTK3 + X11 libs: SWT runtime requires these even headless
-# xvfb: virtual framebuffer for headless SWT/Eclipse
-# fonts: Eclipse/SWT needs at least one font available
-# zip/unzip: model archive handling
-# curl: downloading Rodin tarball
+# GTK3 + X11: SWT requires these even headless; xvfb: virtual framebuffer
+# z3/cvc5: SMT solvers for theorem proving
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libgtk-3-0 \
         libx11-6 \
@@ -35,6 +32,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         zip \
         unzip \
         curl \
+        z3 \
+        cvc5 \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Download and install Rodin ──────────────────────────────────────
@@ -60,7 +59,7 @@ RUN if [ -z "$RODIN_TARBALL" ]; then \
     && chmod +x /opt/rodin/rodin \
     && sed -i '1i -vm\n/opt/java/openjdk/bin' /opt/rodin/rodin.ini
 
-# ── Install ProB (CLI + Rodin plugin) ────────────────────────────
+# ── Install ProB CLI + Rodin plugins (ProB, SMT Solvers) ─────────
 # PROB_VERSION: "latest" (default) or a specific version like "1.15.1"
 ARG PROB_VERSION=latest
 
@@ -84,8 +83,8 @@ RUN eval "$(/tmp/prob-version.sh "$PROB_VERSION")" \
     && java -jar /opt/rodin/plugins/org.eclipse.equinox.launcher_*.jar \
         -nosplash \
         -application org.eclipse.equinox.p2.director \
-        -repository "https://stups.hhu-hosting.de/rodin/prob1/release/,https://download.eclipse.org/releases/$ECLIPSE_RELEASE/" \
-        -installIU de.prob2.feature.feature.group,de.prob2.disprover.feature.feature.group,de.prob2.symbolic.feature.feature.group \
+        -repository "http://rodin-b-sharp.sourceforge.net/updates/,https://stups.hhu-hosting.de/rodin/prob1/release/,https://download.eclipse.org/releases/$ECLIPSE_RELEASE/" \
+        -installIU org.eventb.smt.feature.group,de.prob2.feature.feature.group,de.prob2.disprover.feature.feature.group,de.prob2.symbolic.feature.feature.group \
         -destination /opt/rodin
 
 # ── Runtime configuration ──────────────────────────────────────────

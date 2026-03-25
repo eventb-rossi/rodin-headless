@@ -1,4 +1,4 @@
-FROM docker.io/eclipse-temurin:21-jdk-jammy
+FROM docker.io/eclipse-temurin:21-jdk-noble
 
 LABEL description="Rodin Event-B IDE headless builder"
 

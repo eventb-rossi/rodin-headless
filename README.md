@@ -94,7 +94,7 @@ export RODIN_DIR=/opt/rodin MODELS_DIR=./models
 2. Generates `.project` files where missing
 3. Compiles and installs a temporary OSGi plugin that imports projects and triggers a full workspace build
 4. Runs Rodin headlessly via the Eclipse Equinox launcher
-5. Copies generated `.bcm`/`.bcc` artifacts back into the original archives
+5. Copies all generated/updated files (`.bcm`, `.bcc`, `.bpo`, `.bps`, `.bpr`) back into the original archives
 6. Optionally runs ProB validation or Rodin auto-provers (depending on command)
 
 ## Image Details

@@ -438,10 +438,6 @@ echo
 
 # --- Step 4: Check results and repackage ---
 echo "=== Step 4: Repackaging archives ==="
-total_bcm=$(find "$WORKSPACE" -name "*.bcm" | wc -l)
-total_bcc=$(find "$WORKSPACE" -name "*.bcc" | wc -l)
-echo "Generated: $total_bcm .bcm, $total_bcc .bcc files"
-echo
 
 for zip in "${ZIPS[@]}"; do
     zip=$(basename "$zip")
@@ -454,7 +450,7 @@ for zip in "${ZIPS[@]}"; do
     tmpdir=$(mktemp -d)
     unzip -q "$MODELS_DIR/$zip" -d "$tmpdir"
 
-    # Find where .bum files are
+    # Find the project root inside the zip (directory containing .bum files)
     bumdir=$(find "$tmpdir" -name "*.bum" -exec dirname {} \; | sort -u | head -1)
     if [ -z "$bumdir" ]; then
         rm -rf "$tmpdir"
@@ -470,26 +466,26 @@ for zip in "${ZIPS[@]}"; do
     fi
 
     if [ -n "$projdir" ]; then
-        bcm_count=$(find "$projdir" -maxdepth 1 -name "*.bcm" | wc -l)
-        bcc_count=$(find "$projdir" -maxdepth 1 -name "*.bcc" | wc -l)
         changed=false
-        for ext in bcm bcc; do
-            for src in "$projdir"/*."$ext"; do
-                [ -f "$src" ] || continue
-                fname="${src##*/}"
-                dest="$bumdir/$fname"
-                if [ -f "$dest" ] && cmp -s "$src" "$dest"; then
-                    : # identical — keep original file and its timestamp
-                else
-                    cp "$src" "$dest"
-                    changed=true
-                fi
-            done
+        updated=0
+        # Copy non-hidden workspace files back to the archive
+        # (the glob excludes dotfiles like .project by default)
+        for src in "$projdir"/*; do
+            [ -f "$src" ] || continue
+            fname="${src##*/}"
+            dest="$bumdir/$fname"
+            if [ -f "$dest" ] && cmp -s "$src" "$dest"; then
+                : # identical — keep original file and its timestamp
+            else
+                cp "$src" "$dest"
+                changed=true
+                updated=$((updated + 1))
+            fi
         done
         if [ "$changed" = true ]; then
             (cd "$tmpdir" && zip -q -r "$MODELS_DIR/$zip" .)
         fi
-        echo "  $m: +$bcm_count .bcm, +$bcc_count .bcc"
+        echo "  $m: $updated file(s) updated"
     else
         echo "  $m: no matching workspace project found"
     fi

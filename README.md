@@ -1,6 +1,6 @@
 # rodin-docker
 
-Docker image for headless [Rodin](https://wiki.event-b.org/index.php/Main_Page) Event-B model building. Feed it `.zip` archives containing Event-B models and get back static-checked artifacts (`.bcm`/`.bcc`).
+Docker image for headless [Rodin](https://wiki.event-b.org/index.php/Main_Page) Event-B model building, validation, and proving. Feed it `.zip` archives containing Event-B models and get back static-checked artifacts (`.bcm`/`.bcc`), model checking results, and proof obligation discharge reports.
 
 ## Quick Start
 
@@ -20,7 +20,10 @@ docker run --rm -v "$(pwd):/models" rodin-headless <command> [args...]
 | Command | Description |
 |---------|-------------|
 | `build [zips...]` | Build Event-B models with Rodin (default) |
-| `check <file> [opts...]` | Model-check with ProB (`probcli -mc 1000`) |
+| `check [zips...]` | Build + model-check with ProB (1000 states) |
+| `prove [zips...]` | Build + CBC invariant checking with ProB |
+| `validate [zips...]` | Build + full ProB validation (invariants + deadlock + assertions) |
+| `autoprove [zips...]` | Build + auto-prove POs with SMT/Atelier B tactics |
 | `probcli [args...]` | Run probcli directly with arbitrary arguments |
 | `help` | Show available commands |
 
@@ -36,14 +39,27 @@ docker run --rm -v /path/to/models:/models rodin-headless
 docker run --rm -v "$(pwd):/models" rodin-headless build model1.zip model2.zip
 ```
 
-### Model check with ProB
+### Validate with ProB
 
 ```bash
-# Quick model check (1000 states)
-docker run --rm -v "$(pwd):/models" rodin-headless check my-project/M1.bum
+# Model check (bounded state space exploration, 1000 states)
+docker run --rm -v "$(pwd):/models" rodin-headless check model.zip
+
+# Constraint-based invariant proving (tests inductiveness)
+docker run --rm -v "$(pwd):/models" rodin-headless prove model.zip
+
+# Full validation (invariants + deadlock + assertions)
+docker run --rm -v "$(pwd):/models" rodin-headless validate model.zip
 
 # Custom probcli invocation
-docker run --rm -v "$(pwd):/models" rodin-headless probcli my-project/M1.bum -mc 5000 -nodead
+docker run --rm -v "$(pwd):/models" rodin-headless probcli model.eventb -mc 5000 -nodead
+```
+
+### Auto-prove proof obligations
+
+```bash
+# Discharge POs using SMT solvers (Z3, CVC5, veriT) and Atelier B provers (PP, ML)
+docker run --rm -v "$(pwd):/models" rodin-headless autoprove model.zip
 ```
 
 ### SELinux / Podman
@@ -56,17 +72,20 @@ docker run --rm -v "$(pwd):/models:Z" rodin-headless model.zip
 
 ### Standalone (without Docker)
 
-The build script can also run directly on a host with Rodin and Java 21+ installed:
+The script can also run directly on a host with Rodin and Java 21+ installed:
 
 ```bash
-./rodin-headless-build.sh /path/to/rodin /path/to/models [model1.zip ...]
+./rodin-headless.sh /path/to/rodin /path/to/models [model1.zip ...]
+
+# With a mode
+./rodin-headless.sh --mode autoprove /path/to/rodin /path/to/models model.zip
 ```
 
 Or via environment variables:
 
 ```bash
 export RODIN_DIR=/opt/rodin MODELS_DIR=./models
-./rodin-headless-build.sh model1.zip
+./rodin-headless.sh model1.zip
 ```
 
 ## What It Does
@@ -76,16 +95,19 @@ export RODIN_DIR=/opt/rodin MODELS_DIR=./models
 3. Compiles and installs a temporary OSGi plugin that imports projects and triggers a full workspace build
 4. Runs Rodin headlessly via the Eclipse Equinox launcher
 5. Copies generated `.bcm`/`.bcc` artifacts back into the original archives
+6. Optionally runs ProB validation or Rodin auto-provers (depending on command)
 
 ## Image Details
 
 | Component | Version |
 |-----------|---------|
-| Base image | `eclipse-temurin:21-jdk-jammy` |
+| Base image | `eclipse-temurin:21-jdk-noble` |
 | Rodin | auto-detected latest stable (currently 3.9) |
-| ProB CLI | 1.15.1 |
+| ProB CLI | auto-detected latest stable |
 | ProB Rodin plugin | 3.2.1 (core, disprover, symbolic) |
-| Image size | ~900 MB |
+| SMT Solvers plugin | 1.5.0 (Z3, CVC5, veriT, CVC3, CVC4) |
+| Atelier B provers | 2.4.1 (PP, ML) |
+| Image size | ~1.1 GB |
 
 ### Rodin Version Selection
 
@@ -112,20 +134,9 @@ The `rodin-version.sh` helper script can also be used standalone to query availa
 
 ```bash
 ./rodin-version.sh              # latest stable
-./rodin-version.sh --rc         # latest RC
-./rodin-version.sh --version 3.8
+./rodin-version.sh latest-rc    # latest RC
+./rodin-version.sh 3.8          # specific version
 ```
-
-## ProB
-
-The image includes [ProB](https://prob.hhu.de/) for model checking and animation:
-
-```bash
-docker run --rm -v "$(pwd):/models" rodin-headless check my-project/M1.bum
-docker run --rm -v "$(pwd):/models" rodin-headless probcli my-project/M1.bum -cbc_deadlock
-```
-
-The ProB Rodin plugin (core, disprover, symbolic) is also installed, making ProB available during Rodin workspace builds.
 
 ## Model Archive Format
 

@@ -13,14 +13,14 @@
 # - Rodin IDE installed (Eclipse-based)
 # - Java 21+ (for compiling the OSGi plugin)
 #
-# Usage: ./rodin-headless-build.sh [--mode MODE] [<rodin-dir> <models-dir>] [model1.zip ...]
+# Usage: ./rodin-headless.sh [--mode MODE] [<rodin-dir> <models-dir>] [model1.zip ...]
 #   If no specific models are listed, all .zip files in models-dir are processed.
 #   Paths can also be set via RODIN_DIR and MODELS_DIR environment variables.
 #   MODE: build (default), check, prove, validate
 #
 # Examples:
-#   ./rodin-headless-build.sh /home/work/bin/rodin . evbt_bridge.zip evbt_elevator.zip
-#   RODIN_DIR=/opt/rodin MODELS_DIR=/models ./rodin-headless-build.sh model.zip
+#   ./rodin-headless.sh /home/work/bin/rodin . evbt_bridge.zip evbt_elevator.zip
+#   RODIN_DIR=/opt/rodin MODELS_DIR=/models ./rodin-headless.sh model.zip
 #   docker run --rm -v "$(pwd):/models" rodin-headless model.zip
 
 set -euo pipefail

@@ -26,12 +26,12 @@ EOF
 }
 
 case "${1:-}" in
-    build)    shift; exec rodin-headless-build.sh "$@" ;;
-    check)    shift; exec rodin-headless-build.sh --mode check "$@" ;;
-    prove)    shift; exec rodin-headless-build.sh --mode prove "$@" ;;
-    validate)  shift; exec rodin-headless-build.sh --mode validate "$@" ;;
-    autoprove) shift; exec rodin-headless-build.sh --mode autoprove "$@" ;;
+    build)    shift; exec rodin-headless.sh "$@" ;;
+    check)    shift; exec rodin-headless.sh --mode check "$@" ;;
+    prove)    shift; exec rodin-headless.sh --mode prove "$@" ;;
+    validate)  shift; exec rodin-headless.sh --mode validate "$@" ;;
+    autoprove) shift; exec rodin-headless.sh --mode autoprove "$@" ;;
     probcli)   shift; exec probcli "$@" ;;
     help|--help|-h) usage; exit 0 ;;
-    *)        exec rodin-headless-build.sh "$@" ;;
+    *)        exec rodin-headless.sh "$@" ;;
 esac

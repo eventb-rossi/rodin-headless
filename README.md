@@ -5,16 +5,15 @@ Docker image for headless [Rodin](https://wiki.event-b.org/index.php/Main_Page) 
 ## Quick Start
 
 ```bash
-docker build -t rodin-headless .
-docker run --rm -v "$(pwd):/models" rodin-headless my-model.zip
+./rodin my-model.zip
 ```
 
-The built artifacts are written back into the zip in-place.
+The `rodin` wrapper auto-builds the Docker image on first run and mounts the current directory. Built artifacts are written back into the zip in-place.
 
 ## Commands
 
 ```bash
-docker run --rm -v "$(pwd):/models" rodin-headless <command> [args...]
+./rodin <command> [args...]
 ```
 
 | Command | Description |
@@ -27,48 +26,44 @@ docker run --rm -v "$(pwd):/models" rodin-headless <command> [args...]
 | `probcli [args...]` | Run probcli directly with arbitrary arguments |
 | `help` | Show available commands |
 
-If no command is given, `build` is assumed (backward compatible).
+If no command is given, `build` is assumed.
 
 ### Build models
 
 ```bash
-# Build all .zip models in a directory
-docker run --rm -v /path/to/models:/models rodin-headless
+# Build all .zip models in current directory
+./rodin
 
 # Build specific models
-docker run --rm -v "$(pwd):/models" rodin-headless build model1.zip model2.zip
+./rodin build model1.zip model2.zip
 ```
 
 ### Validate with ProB
 
 ```bash
 # Model check (bounded state space exploration, 1000 states)
-docker run --rm -v "$(pwd):/models" rodin-headless check model.zip
+./rodin check model.zip
 
 # Constraint-based invariant proving (tests inductiveness)
-docker run --rm -v "$(pwd):/models" rodin-headless prove model.zip
+./rodin prove model.zip
 
 # Full validation (invariants + deadlock + assertions)
-docker run --rm -v "$(pwd):/models" rodin-headless validate model.zip
+./rodin validate model.zip
 
 # Custom probcli invocation
-docker run --rm -v "$(pwd):/models" rodin-headless probcli model.eventb -mc 5000 -nodead
+./rodin probcli model.eventb -mc 5000 -nodead
 ```
 
 ### Auto-prove proof obligations
 
 ```bash
 # Discharge POs using SMT solvers (Z3, CVC5, veriT) and Atelier B provers (PP, ML)
-docker run --rm -v "$(pwd):/models" rodin-headless autoprove model.zip
+./rodin autoprove model.zip
 ```
 
 ### SELinux / Podman
 
-On Fedora, RHEL, or other SELinux-enforcing systems, add `:Z` to the volume mount:
-
-```bash
-docker run --rm -v "$(pwd):/models:Z" rodin-headless model.zip
-```
+The `rodin` wrapper auto-detects SELinux and applies the `:Z` volume flag. Docker and podman are both supported.
 
 ### Standalone (without Docker)
 

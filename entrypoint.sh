@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-Usage: docker run rodin-headless <command> [args...]
+Usage: ./rodin <command> [args...]
 
 Commands:
   build [zips...]                Build Event-B models with Rodin (default)
@@ -15,13 +15,13 @@ Commands:
   help                           Show this help
 
 Examples:
-  docker run --rm -v .:/models rodin-headless model.zip
-  docker run --rm -v .:/models rodin-headless build model.zip
-  docker run --rm -v .:/models rodin-headless check model.zip
-  docker run --rm -v .:/models rodin-headless prove model.zip
-  docker run --rm -v .:/models rodin-headless validate model.zip
-  docker run --rm -v .:/models rodin-headless autoprove model.zip
-  docker run --rm -v .:/models rodin-headless probcli model.eventb -mc 500
+  ./rodin model.zip
+  ./rodin build model.zip
+  ./rodin check model.zip
+  ./rodin prove model.zip
+  ./rodin validate model.zip
+  ./rodin autoprove model.zip
+  ./rodin probcli model.eventb -mc 500
 EOF
 }
 

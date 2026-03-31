@@ -144,4 +144,4 @@ The script resolves the project name using (in priority order):
 
 ## License
 
-TBD
+[MIT](LICENSE)

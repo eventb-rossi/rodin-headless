@@ -69,8 +69,56 @@ EOF
     fi
 }
 
+test_rodin_version_uses_highest_release() {
+    local tmpbin stable_output rc_output
+    tmpbin="$(new_tmpdir)"
+
+    cat > "$tmpbin/curl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+url="${@: -1}"
+
+case "$url" in
+    */Core_Rodin_Platform/)
+        cat <<'OUT'
+{"name":"3.8"}
+{"name":"3.10-RC1"}
+{"name":"3.9"}
+{"name":"3.11-RC2"}
+{"name":"3.10"}
+OUT
+        ;;
+    */Core_Rodin_Platform/3.10/)
+        printf '%s\n' 'rodin-3.10.0-linux.gtk.x86_64.tar.gz'
+        ;;
+    */Core_Rodin_Platform/3.11-RC2/)
+        printf '%s\n' 'rodin-3.11-RC2-linux.gtk.x86_64.tar.gz'
+        ;;
+    *)
+        printf 'unexpected url: %s\n' "$url" >&2
+        exit 1
+        ;;
+esac
+EOF
+    chmod +x "$tmpbin/curl"
+
+    stable_output="$(PATH="$tmpbin:$PATH" "$ROOT_DIR/rodin-version.sh")"
+    rc_output="$(PATH="$tmpbin:$PATH" "$ROOT_DIR/rodin-version.sh" latest-rc)"
+
+    assert_contains "$stable_output" "export RODIN_VERSION='3.10'" \
+        "rodin-version should select the highest stable release"
+    assert_contains "$stable_output" "export RODIN_TARBALL='rodin-3.10.0-linux.gtk.x86_64.tar.gz'" \
+        "rodin-version should fetch the tarball for the selected stable release"
+    assert_contains "$rc_output" "export RODIN_VERSION='3.11-RC2'" \
+        "rodin-version should select the highest release candidate"
+    assert_contains "$rc_output" "export RODIN_TARBALL='rodin-3.11-RC2-linux.gtk.x86_64.tar.gz'" \
+        "rodin-version should fetch the tarball for the selected release candidate"
+}
+
 main() {
     test_rodin_help_skips_runtime
+    test_rodin_version_uses_highest_release
     printf 'PASS: %s\n' "tests/run.sh"
 }
 

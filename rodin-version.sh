@@ -23,12 +23,12 @@ case "$MODE" in
     latest)
         versions=$(curl -fsSL --retry 2 --max-time 30 "$SF_BASE/" \
             | grep -oP '"name":"\K[^"]+')
-        VERSION=$(echo "$versions" | grep -xP '[0-9]+(\.[0-9]+)*' | head -1)
+        VERSION=$(echo "$versions" | grep -xP '[0-9]+(\.[0-9]+)*' | sort -V | tail -1)
         ;;
     latest-rc)
         versions=$(curl -fsSL --retry 2 --max-time 30 "$SF_BASE/" \
             | grep -oP '"name":"\K[^"]+')
-        VERSION=$(echo "$versions" | grep -xP '[0-9]+(\.[0-9]+)*-RC[0-9]*' | head -1)
+        VERSION=$(echo "$versions" | grep -xP '[0-9]+(\.[0-9]+)*-RC[0-9]*' | sort -V | tail -1)
         ;;
     *)
         VERSION="$MODE"

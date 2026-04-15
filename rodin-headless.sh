@@ -423,20 +423,16 @@ Bundle-RequiredExecutionEnvironment: JavaSE-21
 MF
 
 # Compile against Rodin's Eclipse and plugin JARs
-resolve_jar() { ls "$RODIN_PLUGINS"/$1_*.jar 2>/dev/null | tail -1; }
-# de.prob.core is extracted as a directory, not a JAR
-resolve_dir() { ls -d "$RODIN_PLUGINS"/$1_*/ 2>/dev/null | tail -1; }
-
-CP=$(resolve_jar org.eclipse.core.resources)
-CP="$CP:$(resolve_jar org.eclipse.core.runtime)"
-CP="$CP:$(resolve_jar org.eclipse.equinox.app)"
-CP="$CP:$(resolve_jar org.eclipse.equinox.common)"
-CP="$CP:$(resolve_jar org.eclipse.core.jobs)"
-CP="$CP:$(resolve_jar org.eclipse.osgi)"
-CP="$CP:$(resolve_jar org.eventb.core)"
-CP="$CP:$(resolve_jar org.rodinp.core)"
-CP="$CP:$(resolve_jar org.eventb.core.seqprover)"
-PROB_CORE_DIR=$(resolve_dir de.prob.core)
+CP=$(resolve_latest_jar "$RODIN_PLUGINS" org.eclipse.core.resources)
+CP="$CP:$(resolve_latest_jar "$RODIN_PLUGINS" org.eclipse.core.runtime)"
+CP="$CP:$(resolve_latest_jar "$RODIN_PLUGINS" org.eclipse.equinox.app)"
+CP="$CP:$(resolve_latest_jar "$RODIN_PLUGINS" org.eclipse.equinox.common)"
+CP="$CP:$(resolve_latest_jar "$RODIN_PLUGINS" org.eclipse.core.jobs)"
+CP="$CP:$(resolve_latest_jar "$RODIN_PLUGINS" org.eclipse.osgi)"
+CP="$CP:$(resolve_latest_jar "$RODIN_PLUGINS" org.eventb.core)"
+CP="$CP:$(resolve_latest_jar "$RODIN_PLUGINS" org.rodinp.core)"
+CP="$CP:$(resolve_latest_jar "$RODIN_PLUGINS" org.eventb.core.seqprover)"
+PROB_CORE_DIR=$(resolve_latest_dir "$RODIN_PLUGINS" de.prob.core)
 CP="$CP:$PROB_CORE_DIR"
 # de.prob.core has nested JARs in lib/dependencies/
 for jar in "${PROB_CORE_DIR}lib/dependencies"/*.jar; do
@@ -463,7 +459,7 @@ if [ -f "$BUNDLES_INFO" ]; then
 fi
 
 # Build the Rodin launch command (prefer equinox launcher JAR over native binary)
-LAUNCHER_JAR=$(resolve_jar org.eclipse.equinox.launcher)
+LAUNCHER_JAR=$(resolve_latest_jar "$RODIN_PLUGINS" org.eclipse.equinox.launcher)
 if [ -n "$LAUNCHER_JAR" ]; then
     RODIN_CMD=(java "-Drodinbuilder.mode=$BUILD_MODE" -jar "$LAUNCHER_JAR" -install "$RODIN_DIR")
 else

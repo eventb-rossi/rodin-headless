@@ -269,6 +269,30 @@ EOF
         "bundle cleanup should remove only the matching registration"
 }
 
+test_resolve_latest_plugin_paths_use_version_sorting() {
+    local tmpdir jar_path dir_path
+    tmpdir="$(new_tmpdir)"
+
+    : > "$tmpdir/org.eclipse.core.runtime_3.8.0.jar"
+    : > "$tmpdir/org.eclipse.core.runtime_3.10.0.jar"
+    : > "$tmpdir/org.eclipse.core.runtime_3.9.0.jar"
+    mkdir -p "$tmpdir/de.prob.core_2.9.0" "$tmpdir/de.prob.core_10.0.0"
+
+    jar_path="$(
+        . "$ROOT_DIR/rodin-headless-lib.sh"
+        resolve_latest_jar "$tmpdir" org.eclipse.core.runtime
+    )"
+    dir_path="$(
+        . "$ROOT_DIR/rodin-headless-lib.sh"
+        resolve_latest_dir "$tmpdir" de.prob.core
+    )"
+
+    assert_eq "$tmpdir/org.eclipse.core.runtime_3.10.0.jar" "$jar_path" \
+        "plugin jar resolution should use version ordering"
+    assert_eq "$tmpdir/de.prob.core_10.0.0" "$dir_path" \
+        "plugin directory resolution should use version ordering"
+}
+
 test_dockerfile_installs_headless_helper() {
     local dockerfile
     dockerfile="$(cat "$ROOT_DIR/Dockerfile")"
@@ -289,6 +313,7 @@ main() {
     test_run_with_filtered_output_preserves_failure_status
     test_run_with_filtered_output_preserves_success_status
     test_remove_exact_line_only_removes_matching_bundle_registration
+    test_resolve_latest_plugin_paths_use_version_sorting
     test_dockerfile_installs_headless_helper
     printf 'PASS: %s\n' "tests/run.sh"
 }

@@ -31,3 +31,13 @@ run_with_filtered_output() {
     rm -f "$output_file"
     return "$status"
 }
+
+remove_exact_line() {
+    local file_path="$1"
+    local line_to_remove="$2"
+    local temp_file
+
+    temp_file="$(mktemp)"
+    grep -Fvx -- "$line_to_remove" "$file_path" >"$temp_file" || true
+    mv "$temp_file" "$file_path"
+}

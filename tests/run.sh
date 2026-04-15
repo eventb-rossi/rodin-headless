@@ -247,6 +247,28 @@ EOF
         "filtered launcher output should keep successful output"
 }
 
+test_remove_exact_line_only_removes_matching_bundle_registration() {
+    local tmpdir bundles_file
+    tmpdir="$(new_tmpdir)"
+    bundles_file="$tmpdir/bundles.info"
+
+    cat > "$bundles_file" <<'EOF'
+rodinbuilder.other,1.0.0,plugins/rodinbuilder_other.jar,4,false
+rodinbuilder.run123,1.0.0,plugins/rodinbuilder_run123.jar,4,false
+EOF
+
+    . "$ROOT_DIR/rodin-headless-lib.sh"
+    remove_exact_line "$bundles_file" \
+        "rodinbuilder.run123,1.0.0,plugins/rodinbuilder_run123.jar,4,false"
+
+    assert_contains "$(cat "$bundles_file")" \
+        "rodinbuilder.other,1.0.0,plugins/rodinbuilder_other.jar,4,false" \
+        "bundle cleanup should preserve unrelated registrations"
+    assert_not_contains "$(cat "$bundles_file")" \
+        "rodinbuilder.run123,1.0.0,plugins/rodinbuilder_run123.jar,4,false" \
+        "bundle cleanup should remove only the matching registration"
+}
+
 test_dockerfile_installs_headless_helper() {
     local dockerfile
     dockerfile="$(cat "$ROOT_DIR/Dockerfile")"
@@ -266,6 +288,7 @@ main() {
     test_find_archive_project_root_falls_back_to_project_metadata
     test_run_with_filtered_output_preserves_failure_status
     test_run_with_filtered_output_preserves_success_status
+    test_remove_exact_line_only_removes_matching_bundle_registration
     test_dockerfile_installs_headless_helper
     printf 'PASS: %s\n' "tests/run.sh"
 }

@@ -97,12 +97,26 @@ WORKSPACE=$(mktemp -d)
 PLUGIN_DIR=$(mktemp -d)
 RODIN_PLUGINS="$RODIN_DIR/plugins"
 BUNDLES_INFO="$RODIN_DIR/configuration/org.eclipse.equinox.simpleconfigurator/bundles.info"
+LOCK_FILE="$RODIN_DIR/.rodinbuilder.lock"
+RUN_ID="$(basename "$PLUGIN_DIR" | tr -cd '[:alnum:]')"
+BUNDLE_VERSION="1.0.0"
+BUNDLE_SYMBOLIC_NAME="rodinbuilder.$RUN_ID"
+BUNDLE_JAR_NAME="rodinbuilder_${RUN_ID}.jar"
+BUNDLE_INFO_LINE="$BUNDLE_SYMBOLIC_NAME,$BUNDLE_VERSION,plugins/$BUNDLE_JAR_NAME,4,false"
+APPLICATION_ID="$BUNDLE_SYMBOLIC_NAME.headlessBuilder"
 declare -A ZIP_TO_PROJECT  # maps zip basename → workspace project name
 
 cleanup() {
     rm -rf "$WORKSPACE" "$PLUGIN_DIR"
-    rm -f "$RODIN_PLUGINS/rodinbuilder_1.0.0.jar"
-    [ -f "$BUNDLES_INFO" ] && sed -i '/^rodinbuilder,/d' "$BUNDLES_INFO"
+    if [ -n "${LOCK_FD:-}" ]; then
+        rm -f "$RODIN_PLUGINS/$BUNDLE_JAR_NAME"
+        if [ -f "$BUNDLES_INFO" ]; then
+            remove_exact_line "$BUNDLES_INFO" "$BUNDLE_INFO_LINE"
+        fi
+        flock -u "$LOCK_FD" || true
+        exec {LOCK_FD}>&-
+        unset LOCK_FD
+    fi
     [ -n "${XVFB_PID:-}" ] && kill "$XVFB_PID" 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -380,7 +394,7 @@ public class HeadlessBuilder implements IApplication {
 }
 JAVA
 
-cat > "$PLUGIN_DIR/plugin.xml" << 'XML'
+cat > "$PLUGIN_DIR/plugin.xml" << XML
 <?xml version="1.0" encoding="UTF-8"?>
 <?eclipse version="3.4"?>
 <plugin>
@@ -392,12 +406,12 @@ cat > "$PLUGIN_DIR/plugin.xml" << 'XML'
 </plugin>
 XML
 
-cat > "$PLUGIN_DIR/META-INF/MANIFEST.MF" << 'MF'
+cat > "$PLUGIN_DIR/META-INF/MANIFEST.MF" << MF
 Manifest-Version: 1.0
 Bundle-ManifestVersion: 2
 Bundle-Name: Rodin Headless Builder
-Bundle-SymbolicName: rodinbuilder;singleton:=true
-Bundle-Version: 1.0.0
+Bundle-SymbolicName: $BUNDLE_SYMBOLIC_NAME;singleton:=true
+Bundle-Version: $BUNDLE_VERSION
 Require-Bundle: org.eclipse.core.resources,
  org.eclipse.core.runtime,
  org.eclipse.equinox.app,
@@ -430,19 +444,22 @@ for jar in "${PROB_CORE_DIR}lib/dependencies"/*.jar; do
 done
 
 javac -cp "$CP" "$PLUGIN_DIR/rodinbuilder/HeadlessBuilder.java"
-jar cfm "$PLUGIN_DIR/rodinbuilder.jar" "$PLUGIN_DIR/META-INF/MANIFEST.MF" \
+jar cfm "$PLUGIN_DIR/$BUNDLE_JAR_NAME" "$PLUGIN_DIR/META-INF/MANIFEST.MF" \
     -C "$PLUGIN_DIR" plugin.xml \
     -C "$PLUGIN_DIR" rodinbuilder/HeadlessBuilder.class
 
-echo "  Plugin built: $PLUGIN_DIR/rodinbuilder.jar"
+echo "  Plugin built: $PLUGIN_DIR/$BUNDLE_JAR_NAME"
 echo
 
 # --- Step 3: Install plugin and run Rodin headless builder ---
 echo "=== Step 3: Running Rodin headless builder ==="
-# Install plugin to plugins/ directory and register in bundles.info
-cp "$PLUGIN_DIR/rodinbuilder.jar" "$RODIN_PLUGINS/rodinbuilder_1.0.0.jar"
+# Install plugin to plugins/ directory and register in bundles.info.
+# Hold the lock until cleanup so concurrent standalone runs cannot clobber the bundle.
+exec {LOCK_FD}> "$LOCK_FILE"
+flock "$LOCK_FD"
+cp "$PLUGIN_DIR/$BUNDLE_JAR_NAME" "$RODIN_PLUGINS/$BUNDLE_JAR_NAME"
 if [ -f "$BUNDLES_INFO" ]; then
-    echo "rodinbuilder,1.0.0,plugins/rodinbuilder_1.0.0.jar,4,false" >> "$BUNDLES_INFO"
+    echo "$BUNDLE_INFO_LINE" >> "$BUNDLES_INFO"
 fi
 
 # Build the Rodin launch command (prefer equinox launcher JAR over native binary)
@@ -456,7 +473,7 @@ fi
 if run_with_filtered_output \
     "${RODIN_CMD[@]}" \
     -nosplash -clean \
-    -application rodinbuilder.headlessBuilder \
+    -application "$APPLICATION_ID" \
     -data "$WORKSPACE" \
     -consolelog; then
     LAUNCH_STATUS=0

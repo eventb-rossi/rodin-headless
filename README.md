@@ -27,6 +27,7 @@ The `rodin` wrapper auto-builds the Docker image on first run and mounts the cur
 | `help` | Show available commands |
 
 If no command is given, `build` is assumed.
+`./rodin help` is handled locally and does not require Docker, podman, or a prebuilt image.
 
 ### Build models
 
@@ -37,6 +38,8 @@ If no command is given, `build` is assumed.
 # Build specific models
 ./rodin build model1.zip model2.zip
 ```
+
+If no matching archives are found, the wrapper exits non-zero instead of succeeding as a no-op.
 
 ### Validate with ProB
 
@@ -83,6 +86,8 @@ export RODIN_DIR=/opt/rodin MODELS_DIR=./models
 ./rodin-headless.sh model1.zip
 ```
 
+When multiple standalone runs share the same Rodin installation, transient plugin installation is serialized so they do not clobber one another.
+
 ## What It Does
 
 1. Extracts `.zip` archives into a temporary Rodin workspace
@@ -97,7 +102,7 @@ export RODIN_DIR=/opt/rodin MODELS_DIR=./models
 | Component | Version |
 |-----------|---------|
 | Base image | `eclipse-temurin:21-jdk-noble` |
-| Rodin | auto-detected latest stable (currently 3.9) |
+| Rodin | auto-detected latest stable at build time |
 | ProB CLI | auto-detected latest stable |
 | ProB Rodin plugin | 3.2.1 (core, disprover, symbolic) |
 | SMT Solvers plugin | 1.5.0 (Z3, CVC5, veriT, CVC3, CVC4) |
@@ -106,7 +111,7 @@ export RODIN_DIR=/opt/rodin MODELS_DIR=./models
 
 ### Rodin Version Selection
 
-By default, `docker build` auto-detects the latest stable Rodin version from SourceForge:
+By default, `docker build` auto-detects the highest stable Rodin version published on SourceForge:
 
 ```bash
 # Latest stable (default)
@@ -125,7 +130,7 @@ docker build \
   -t rodin-headless .
 ```
 
-The `rodin-version.sh` helper script can also be used standalone to query available versions:
+The `rodin-version.sh` helper script can also be used standalone to query the highest available stable or RC version:
 
 ```bash
 ./rodin-version.sh              # latest stable

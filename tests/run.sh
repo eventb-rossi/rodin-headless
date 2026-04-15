@@ -149,10 +149,54 @@ test_rodin_headless_rejects_missing_archives() {
         "$ROOT_DIR/rodin-headless.sh" missing.zip
 }
 
+test_find_archive_project_root_supports_context_only_models() {
+    local tmpdir actual
+    tmpdir="$(new_tmpdir)"
+    mkdir -p "$tmpdir/project"
+    : > "$tmpdir/project/C1.buc"
+
+    actual="$(
+        . "$ROOT_DIR/rodin-headless-lib.sh"
+        find_archive_project_root "$tmpdir"
+    )"
+
+    assert_eq "$tmpdir/project" "$actual" \
+        "archive root detection should support context-only Event-B archives"
+}
+
+test_find_archive_project_root_falls_back_to_project_metadata() {
+    local tmpdir actual
+    tmpdir="$(new_tmpdir)"
+    mkdir -p "$tmpdir/project"
+    : > "$tmpdir/project/.project"
+
+    actual="$(
+        . "$ROOT_DIR/rodin-headless-lib.sh"
+        find_archive_project_root "$tmpdir"
+    )"
+
+    assert_eq "$tmpdir/project" "$actual" \
+        "archive root detection should fall back to .project when sources are absent"
+}
+
+test_dockerfile_installs_headless_helper() {
+    local dockerfile
+    dockerfile="$(cat "$ROOT_DIR/Dockerfile")"
+
+    assert_contains "$dockerfile" \
+        "COPY --chmod=755 rodin-headless.sh rodin-headless-lib.sh entrypoint.sh" \
+        "Dockerfile should copy the headless helper into the image"
+    assert_contains "$dockerfile" "/usr/local/bin/" \
+        "Dockerfile should install the headless scripts in /usr/local/bin"
+}
+
 main() {
     test_rodin_help_skips_runtime
     test_rodin_version_uses_highest_release
     test_rodin_headless_rejects_missing_archives
+    test_find_archive_project_root_supports_context_only_models
+    test_find_archive_project_root_falls_back_to_project_metadata
+    test_dockerfile_installs_headless_helper
     printf 'PASS: %s\n' "tests/run.sh"
 }
 

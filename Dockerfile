@@ -43,7 +43,8 @@ ARG RODIN_VERSION=latest
 ARG RODIN_TARBALL=
 
 COPY --chmod=755 rodin-version.sh prob-version.sh /tmp/
-COPY --chmod=755 rodin-headless.sh entrypoint.sh /usr/local/bin/
+COPY --chmod=755 rodin-headless.sh rodin-headless-lib.sh entrypoint.sh \
+    /usr/local/bin/
 
 RUN if [ -z "$RODIN_TARBALL" ]; then \
         eval "$(/tmp/rodin-version.sh "$RODIN_VERSION")"; \

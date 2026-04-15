@@ -25,6 +25,10 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Shared shell helpers used by the script and regression tests.
+. "$SCRIPT_DIR/rodin-headless-lib.sh"
+
 # Parse --mode flag
 BUILD_MODE="build"
 if [ "${1:-}" = "--mode" ]; then
@@ -467,8 +471,8 @@ for zip in "${ZIPS[@]}"; do
     tmpdir=$(mktemp -d)
     unzip -q "$MODELS_DIR/$zip" -d "$tmpdir"
 
-    # Find the project root inside the zip (directory containing .bum files)
-    bumdir=$(find "$tmpdir" -name "*.bum" -exec dirname {} \; | sort -u | head -1)
+    # Find the project root inside the zip from Event-B sources or .project metadata.
+    bumdir=$(find_archive_project_root "$tmpdir")
     if [ -z "$bumdir" ]; then
         rm -rf "$tmpdir"
         continue

@@ -58,9 +58,35 @@ fi
 
 # Determine which archives to process
 if [ $# -gt 0 ]; then
-    ZIPS=("$@")
+    SELECTED_ZIPS=("$@")
 else
-    ZIPS=("$MODELS_DIR"/*.zip)
+    shopt -s nullglob
+    SELECTED_ZIPS=("$MODELS_DIR"/*.zip)
+    shopt -u nullglob
+fi
+
+ZIPS=()
+MISSING_ZIPS=()
+for zip in "${SELECTED_ZIPS[@]}"; do
+    zip=$(basename "$zip")
+    if [ -f "$MODELS_DIR/$zip" ]; then
+        ZIPS+=("$zip")
+    else
+        MISSING_ZIPS+=("$zip")
+    fi
+done
+
+for zip in "${MISSING_ZIPS[@]}"; do
+    echo "  SKIP: $zip not found" >&2
+done
+
+if [ ${#ZIPS[@]} -eq 0 ]; then
+    if [ $# -gt 0 ]; then
+        echo "ERROR: None of the requested archives were found in $MODELS_DIR" >&2
+    else
+        echo "ERROR: No .zip archives found in $MODELS_DIR" >&2
+    fi
+    exit 1
 fi
 
 WORKSPACE=$(mktemp -d)
@@ -84,12 +110,7 @@ echo
 # --- Step 1: Extract archives into workspace ---
 echo "=== Step 1: Extracting archives ==="
 for zip in "${ZIPS[@]}"; do
-    zip=$(basename "$zip")
     m="${zip%.zip}"
-    if [ ! -f "$MODELS_DIR/$zip" ]; then
-        echo "  SKIP: $zip not found"
-        continue
-    fi
 
     tmpdir=$(mktemp -d)
     unzip -q "$MODELS_DIR/$zip" -d "$tmpdir"
@@ -440,11 +461,7 @@ echo
 echo "=== Step 4: Repackaging archives ==="
 
 for zip in "${ZIPS[@]}"; do
-    zip=$(basename "$zip")
     m="${zip%.zip}"
-    if [ ! -f "$MODELS_DIR/$zip" ]; then
-        continue
-    fi
 
     # Extract original zip
     tmpdir=$(mktemp -d)

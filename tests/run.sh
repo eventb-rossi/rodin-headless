@@ -43,6 +43,23 @@ assert_contains() {
     fi
 }
 
+assert_fails_with() {
+    local expected_substring="$1"
+    shift
+
+    local output status
+    set +e
+    output="$("$@" 2>&1)"
+    status=$?
+    set -e
+
+    if [ "$status" -eq 0 ]; then
+        fail "expected command to fail: $*"
+    fi
+    assert_contains "$output" "$expected_substring" \
+        "failing command should report the expected error"
+}
+
 test_rodin_help_skips_runtime() {
     local tmpbin output marker
     tmpbin="$(new_tmpdir)"
@@ -116,9 +133,26 @@ EOF
         "rodin-version should fetch the tarball for the selected release candidate"
 }
 
+test_rodin_headless_rejects_missing_archives() {
+    local tmpdir rodin_dir models_dir
+    tmpdir="$(new_tmpdir)"
+    rodin_dir="$tmpdir/rodin"
+    models_dir="$tmpdir/models"
+    mkdir -p "$rodin_dir" "$models_dir"
+
+    assert_fails_with "ERROR: No .zip archives found in $models_dir" \
+        env DISPLAY=:0 RODIN_DIR="$rodin_dir" MODELS_DIR="$models_dir" \
+        "$ROOT_DIR/rodin-headless.sh"
+
+    assert_fails_with "ERROR: None of the requested archives were found in $models_dir" \
+        env DISPLAY=:0 RODIN_DIR="$rodin_dir" MODELS_DIR="$models_dir" \
+        "$ROOT_DIR/rodin-headless.sh" missing.zip
+}
+
 main() {
     test_rodin_help_skips_runtime
     test_rodin_version_uses_highest_release
+    test_rodin_headless_rejects_missing_archives
     printf 'PASS: %s\n' "tests/run.sh"
 }
 

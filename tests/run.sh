@@ -43,6 +43,15 @@ assert_contains() {
     fi
 }
 
+assert_not_contains() {
+    local haystack="$1"
+    local needle="$2"
+    local message="$3"
+    if [[ "$haystack" == *"$needle"* ]]; then
+        fail "$message (unexpected '$needle')"
+    fi
+}
+
 assert_fails_with() {
     local expected_substring="$1"
     shift
@@ -179,6 +188,65 @@ test_find_archive_project_root_falls_back_to_project_metadata() {
         "archive root detection should fall back to .project when sources are absent"
 }
 
+test_run_with_filtered_output_preserves_failure_status() {
+    local tmpdir command output status
+    tmpdir="$(new_tmpdir)"
+    command="$tmpdir/fail-command.sh"
+
+    cat > "$command" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' 'kept line'
+printf '%s\n' '    at hidden frame'
+printf '%s\n' '...'
+printf '\n'
+exit 7
+EOF
+    chmod +x "$command"
+
+    set +e
+    output="$(
+        . "$ROOT_DIR/rodin-headless-lib.sh"
+        run_with_filtered_output "$command"
+    )"
+    status=$?
+    set -e
+
+    assert_eq "7" "$status" \
+        "filtered launcher output should preserve failure exit codes"
+    assert_contains "$output" "kept line" \
+        "filtered launcher output should keep relevant lines"
+    assert_not_contains "$output" "hidden frame" \
+        "filtered launcher output should drop stack trace lines"
+    assert_not_contains "$output" "..." \
+        "filtered launcher output should drop folded stack trace markers"
+}
+
+test_run_with_filtered_output_preserves_success_status() {
+    local tmpdir command output status
+    tmpdir="$(new_tmpdir)"
+    command="$tmpdir/success-command.sh"
+
+    cat > "$command" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' 'success line'
+exit 0
+EOF
+    chmod +x "$command"
+
+    set +e
+    output="$(
+        . "$ROOT_DIR/rodin-headless-lib.sh"
+        run_with_filtered_output "$command"
+    )"
+    status=$?
+    set -e
+
+    assert_eq "0" "$status" \
+        "filtered launcher output should preserve success exit codes"
+    assert_contains "$output" "success line" \
+        "filtered launcher output should keep successful output"
+}
+
 test_dockerfile_installs_headless_helper() {
     local dockerfile
     dockerfile="$(cat "$ROOT_DIR/Dockerfile")"
@@ -196,6 +264,8 @@ main() {
     test_rodin_headless_rejects_missing_archives
     test_find_archive_project_root_supports_context_only_models
     test_find_archive_project_root_falls_back_to_project_metadata
+    test_run_with_filtered_output_preserves_failure_status
+    test_run_with_filtered_output_preserves_success_status
     test_dockerfile_installs_headless_helper
     printf 'PASS: %s\n' "tests/run.sh"
 }

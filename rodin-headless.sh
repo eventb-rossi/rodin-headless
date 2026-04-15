@@ -453,12 +453,16 @@ else
     RODIN_CMD=("$RODIN_DIR/rodin")
 fi
 
-"${RODIN_CMD[@]}" \
+if run_with_filtered_output \
+    "${RODIN_CMD[@]}" \
     -nosplash -clean \
     -application rodinbuilder.headlessBuilder \
     -data "$WORKSPACE" \
-    -consolelog \
-    2>&1 | grep -v "^\s*at " | grep -v "^\.\.\." | grep -v "^$" || true
+    -consolelog; then
+    LAUNCH_STATUS=0
+else
+    LAUNCH_STATUS=$?
+fi
 echo
 
 # --- Step 4: Check results and repackage ---
@@ -515,4 +519,8 @@ for zip in "${ZIPS[@]}"; do
 done
 
 echo
+if [ "$LAUNCH_STATUS" -ne 0 ]; then
+    exit "$LAUNCH_STATUS"
+fi
+
 echo "Done."

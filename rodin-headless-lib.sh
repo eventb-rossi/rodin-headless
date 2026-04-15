@@ -41,3 +41,19 @@ remove_exact_line() {
     grep -Fvx -- "$line_to_remove" "$file_path" >"$temp_file" || true
     mv "$temp_file" "$file_path"
 }
+
+resolve_latest_jar() {
+    local search_dir="$1"
+    local bundle_name="$2"
+
+    find "$search_dir" -maxdepth 1 -type f -name "${bundle_name}_*.jar" -print \
+        | sort -V | tail -1
+}
+
+resolve_latest_dir() {
+    local search_dir="$1"
+    local bundle_name="$2"
+
+    find "$search_dir" -maxdepth 1 -type d -name "${bundle_name}_*" -print \
+        | sort -V | tail -1
+}

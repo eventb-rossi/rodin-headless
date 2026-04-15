@@ -11,6 +11,12 @@ set -euo pipefail
 IMAGE="rodin-headless"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+case "${1:-}" in
+    help|--help|-h)
+        exec bash "$SCRIPT_DIR/entrypoint.sh" help
+        ;;
+esac
+
 # Detect container runtime
 if command -v docker >/dev/null 2>&1; then
     RUNTIME=docker

@@ -293,6 +293,40 @@ test_resolve_latest_plugin_paths_use_version_sorting() {
         "plugin directory resolution should use version ordering"
 }
 
+test_prob_core_dependency_glob_uses_resolved_directory() {
+    local tmpdir actual
+    tmpdir="$(new_tmpdir)"
+    mkdir -p "$tmpdir/de.prob.core_10.0.0/lib/dependencies"
+    : > "$tmpdir/de.prob.core_10.0.0/lib/dependencies/prologlib.jar"
+
+    actual="$(
+        . "$ROOT_DIR/rodin-headless-lib.sh"
+        prob_core_dir="$(resolve_latest_dir "$tmpdir" de.prob.core)"
+        for jar in "$prob_core_dir"/lib/dependencies/*.jar; do
+            [ -f "$jar" ] && printf '%s\n' "$jar"
+        done
+    )"
+
+    assert_eq "$tmpdir/de.prob.core_10.0.0/lib/dependencies/prologlib.jar" "$actual" \
+        "ProB dependency discovery should join the resolved directory with /lib/dependencies"
+}
+
+test_validate_deadlock_check_uses_eventb_true_ast() {
+    local script
+    script="$(cat "$ROOT_DIR/rodin-headless.sh")"
+
+    assert_contains "$script" "FormulaUtils.printPredicate" \
+        "validate should translate an Event-B predicate into a raw Prolog AST"
+    assert_contains "$script" "Formula.BTRUE" \
+        "validate should build the Event-B TRUE predicate for deadlock checking"
+    assert_contains "$script" 'resolve_latest_jar "$RODIN_PLUGINS" org.eventb.core.ast' \
+        "validate should compile against the Event-B AST bundle"
+    assert_contains "$script" "new ConstraintBasedDeadlockCheckCommand(makeTruePredicateTerm())" \
+        "validate should pass the translated TRUE predicate into deadlock checking"
+    assert_not_contains "$script" "new CompoundPrologTerm(\"truth\")" \
+        "validate should not pass the unsupported truth atom to ProB"
+}
+
 test_dockerfile_installs_headless_helper() {
     local dockerfile
     dockerfile="$(cat "$ROOT_DIR/Dockerfile")"
@@ -314,6 +348,8 @@ main() {
     test_run_with_filtered_output_preserves_success_status
     test_remove_exact_line_only_removes_matching_bundle_registration
     test_resolve_latest_plugin_paths_use_version_sorting
+    test_prob_core_dependency_glob_uses_resolved_directory
+    test_validate_deadlock_check_uses_eventb_true_ast
     test_dockerfile_installs_headless_helper
     printf 'PASS: %s\n' "tests/run.sh"
 }

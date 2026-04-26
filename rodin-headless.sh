@@ -205,8 +205,13 @@ import org.rodinp.core.*;
 import org.eventb.core.*;
 import de.prob.core.Animator;
 import de.prob.core.command.*;
-import de.prob.prolog.term.CompoundPrologTerm;
+import de.prob.prolog.output.StructuredPrologOutput;
+import de.prob.prolog.term.PrologTerm;
 import org.eventb.core.seqprover.IConfidence;
+import org.eventb.core.ast.Formula;
+import org.eventb.core.ast.FormulaFactory;
+import org.eventb.core.ast.Predicate;
+import de.prob.sap.util.FormulaUtils;
 import java.io.File;
 import java.util.*;
 
@@ -355,7 +360,7 @@ public class HeadlessBuilder implements IApplication {
                     if ("validate".equals(mode)) {
                         System.out.println("  CBC deadlock checking...");
                         ConstraintBasedDeadlockCheckCommand dlCmd =
-                            new ConstraintBasedDeadlockCheckCommand(new CompoundPrologTerm("truth"));
+                            new ConstraintBasedDeadlockCheckCommand(makeTruePredicateTerm());
                         animator.execute(dlCmd);
                         System.out.println("  Deadlock CBC: " + dlCmd.getResult());
                         if (dlCmd.getResult() == ConstraintBasedDeadlockCheckCommand.ResultType.DEADLOCK_FOUND) {
@@ -389,6 +394,14 @@ public class HeadlessBuilder implements IApplication {
         return allPassed;
     }
 
+    private PrologTerm makeTruePredicateTerm() {
+        FormulaFactory factory = FormulaFactory.getDefault();
+        Predicate predicate = factory.makeLiteralPredicate(Formula.BTRUE, null);
+        StructuredPrologOutput output = new StructuredPrologOutput();
+        FormulaUtils.printPredicate(predicate, output);
+        return output.getFinishedTerm();
+    }
+
     @Override
     public void stop() {}
 }
@@ -417,6 +430,7 @@ Require-Bundle: org.eclipse.core.resources,
  org.eclipse.equinox.app,
  de.prob.core,
  org.eventb.core,
+ org.eventb.core.ast,
  org.eventb.core.seqprover,
  org.rodinp.core
 Bundle-RequiredExecutionEnvironment: JavaSE-21
@@ -430,12 +444,13 @@ CP="$CP:$(resolve_latest_jar "$RODIN_PLUGINS" org.eclipse.equinox.common)"
 CP="$CP:$(resolve_latest_jar "$RODIN_PLUGINS" org.eclipse.core.jobs)"
 CP="$CP:$(resolve_latest_jar "$RODIN_PLUGINS" org.eclipse.osgi)"
 CP="$CP:$(resolve_latest_jar "$RODIN_PLUGINS" org.eventb.core)"
+CP="$CP:$(resolve_latest_jar "$RODIN_PLUGINS" org.eventb.core.ast)"
 CP="$CP:$(resolve_latest_jar "$RODIN_PLUGINS" org.rodinp.core)"
 CP="$CP:$(resolve_latest_jar "$RODIN_PLUGINS" org.eventb.core.seqprover)"
 PROB_CORE_DIR=$(resolve_latest_dir "$RODIN_PLUGINS" de.prob.core)
 CP="$CP:$PROB_CORE_DIR"
 # de.prob.core has nested JARs in lib/dependencies/
-for jar in "${PROB_CORE_DIR}lib/dependencies"/*.jar; do
+for jar in "$PROB_CORE_DIR"/lib/dependencies/*.jar; do
     [ -f "$jar" ] && CP="$CP:$jar"
 done
 

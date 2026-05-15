@@ -41,6 +41,11 @@ If no command is given, `build` is assumed.
 
 If no matching archives are found, the wrapper exits non-zero instead of succeeding as a no-op.
 
+Rodin workspace builds have a hard timeout of 60 minutes by default. Override
+it with `RODIN_BUILD_TIMEOUT`, or set `RODIN_BUILD_TIMEOUT=off` to disable it.
+When using `./rodin`, the wrapper forwards `RODIN_BUILD_TIMEOUT` and
+`RODIN_BUILD_TIMEOUT_KILL_AFTER` into the container.
+
 ### Validate with ProB
 
 ```bash

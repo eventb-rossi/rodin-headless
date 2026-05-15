@@ -16,6 +16,7 @@
 # Usage: ./rodin-headless.sh [--mode MODE] [<rodin-dir> <models-dir>] [model1.zip ...]
 #   If no specific models are listed, all .zip files in models-dir are processed.
 #   Paths can also be set via RODIN_DIR and MODELS_DIR environment variables.
+#   RODIN_BUILD_TIMEOUT defaults to 60m; set to off to disable.
 #   MODE: build (default), check, prove, validate
 #
 # Examples:
@@ -104,6 +105,8 @@ BUNDLE_SYMBOLIC_NAME="rodinbuilder.$RUN_ID"
 BUNDLE_JAR_NAME="rodinbuilder_${RUN_ID}.jar"
 BUNDLE_INFO_LINE="$BUNDLE_SYMBOLIC_NAME,$BUNDLE_VERSION,plugins/$BUNDLE_JAR_NAME,4,false"
 APPLICATION_ID="$BUNDLE_SYMBOLIC_NAME.headlessBuilder"
+RODIN_BUILD_TIMEOUT="${RODIN_BUILD_TIMEOUT:-60m}"
+RODIN_BUILD_TIMEOUT_KILL_AFTER="${RODIN_BUILD_TIMEOUT_KILL_AFTER:-30s}"
 declare -A ZIP_TO_PROJECT  # maps zip basename → workspace project name
 
 cleanup() {
@@ -481,17 +484,24 @@ else
     RODIN_CMD=("$RODIN_DIR/rodin")
 fi
 
-if run_with_filtered_output \
+echo "Rodin build timeout: $RODIN_BUILD_TIMEOUT"
+
+LAUNCH_STATUS=0
+run_with_filtered_output \
+    run_with_optional_timeout "$RODIN_BUILD_TIMEOUT" "$RODIN_BUILD_TIMEOUT_KILL_AFTER" \
     "${RODIN_CMD[@]}" \
     -nosplash -clean \
     -application "$APPLICATION_ID" \
     -data "$WORKSPACE" \
-    -consolelog; then
-    LAUNCH_STATUS=0
-else
-    LAUNCH_STATUS=$?
-fi
+    -consolelog || LAUNCH_STATUS=$?
 echo
+
+case "$LAUNCH_STATUS" in
+    124 | 137)
+        echo "ERROR: Rodin headless builder timed out after $RODIN_BUILD_TIMEOUT; skipping archive repackaging." >&2
+        exit "$LAUNCH_STATUS"
+        ;;
+esac
 
 # --- Step 4: Check results and repackage ---
 echo "=== Step 4: Repackaging archives ==="

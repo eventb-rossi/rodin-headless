@@ -142,6 +142,40 @@ EOF
         "rodin-version should fetch the tarball for the selected release candidate"
 }
 
+test_rodin_forwards_timeout_environment() {
+    local tmpbin args_file args
+    tmpbin="$(new_tmpdir)"
+    args_file="$tmpbin/docker.args"
+
+    cat > "$tmpbin/docker" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+case "$1 $2" in
+    "image inspect")
+        exit 0
+        ;;
+esac
+
+printf '<%s>\n' "$@" > "$RODIN_TEST_ARGS"
+EOF
+    chmod +x "$tmpbin/docker"
+
+    RODIN_TEST_ARGS="$args_file" \
+    RODIN_BUILD_TIMEOUT=2m \
+    RODIN_BUILD_TIMEOUT_KILL_AFTER=5s \
+    PATH="$tmpbin:$PATH" \
+        "$ROOT_DIR/rodin" build model.zip
+
+    args="$(cat "$args_file")"
+    assert_contains "$args" "<-e>
+<RODIN_BUILD_TIMEOUT>" \
+        "rodin wrapper should forward the build timeout environment"
+    assert_contains "$args" "<-e>
+<RODIN_BUILD_TIMEOUT_KILL_AFTER>" \
+        "rodin wrapper should forward the timeout kill-after environment"
+}
+
 test_rodin_headless_rejects_missing_archives() {
     local tmpdir rodin_dir models_dir
     tmpdir="$(new_tmpdir)"
@@ -247,6 +281,79 @@ EOF
         "filtered launcher output should keep successful output"
 }
 
+test_run_with_optional_timeout_preserves_success_status() {
+    local tmpdir command status
+    tmpdir="$(new_tmpdir)"
+    command="$tmpdir/success-command.sh"
+
+    cat > "$command" <<'EOF'
+#!/usr/bin/env bash
+exit 3
+EOF
+    chmod +x "$command"
+
+    set +e
+    (
+        . "$ROOT_DIR/rodin-headless-lib.sh"
+        run_with_optional_timeout 5s 1s "$command"
+    )
+    status=$?
+    set -e
+
+    assert_eq "3" "$status" \
+        "timeout wrapper should preserve non-timeout command status"
+}
+
+test_run_with_optional_timeout_can_be_disabled() {
+    local tmpdir command status
+    tmpdir="$(new_tmpdir)"
+    command="$tmpdir/disabled-command.sh"
+
+    cat > "$command" <<'EOF'
+#!/usr/bin/env bash
+exit 9
+EOF
+    chmod +x "$command"
+
+    set +e
+    (
+        . "$ROOT_DIR/rodin-headless-lib.sh"
+        run_with_optional_timeout off 1s "$command"
+    )
+    status=$?
+    set -e
+
+    assert_eq "9" "$status" \
+        "disabled timeout wrapper should run the command directly"
+}
+
+test_run_with_optional_timeout_reports_timeout() {
+    local status
+
+    set +e
+    (
+        . "$ROOT_DIR/rodin-headless-lib.sh"
+        run_with_optional_timeout 1s 1s sleep 2
+    )
+    status=$?
+    set -e
+
+    assert_eq "124" "$status" \
+        "timeout wrapper should return GNU timeout's timeout status"
+}
+
+test_rodin_headless_wraps_launch_with_timeout() {
+    local script
+    script="$(cat "$ROOT_DIR/rodin-headless.sh")"
+
+    assert_contains "$script" 'RODIN_BUILD_TIMEOUT="${RODIN_BUILD_TIMEOUT:-60m}"' \
+        "headless script should define a default Rodin build timeout"
+    assert_contains "$script" 'run_with_optional_timeout "$RODIN_BUILD_TIMEOUT" "$RODIN_BUILD_TIMEOUT_KILL_AFTER"' \
+        "headless script should wrap the Rodin launch with the timeout helper"
+    assert_contains "$script" "skipping archive repackaging" \
+        "headless script should avoid repackaging partial timeout results"
+}
+
 test_remove_exact_line_only_removes_matching_bundle_registration() {
     local tmpdir bundles_file
     tmpdir="$(new_tmpdir)"
@@ -341,11 +448,16 @@ test_dockerfile_installs_headless_helper() {
 main() {
     test_rodin_help_skips_runtime
     test_rodin_version_uses_highest_release
+    test_rodin_forwards_timeout_environment
     test_rodin_headless_rejects_missing_archives
     test_find_archive_project_root_supports_context_only_models
     test_find_archive_project_root_falls_back_to_project_metadata
     test_run_with_filtered_output_preserves_failure_status
     test_run_with_filtered_output_preserves_success_status
+    test_run_with_optional_timeout_preserves_success_status
+    test_run_with_optional_timeout_can_be_disabled
+    test_run_with_optional_timeout_reports_timeout
+    test_rodin_headless_wraps_launch_with_timeout
     test_remove_exact_line_only_removes_matching_bundle_registration
     test_resolve_latest_plugin_paths_use_version_sorting
     test_prob_core_dependency_glob_uses_resolved_directory

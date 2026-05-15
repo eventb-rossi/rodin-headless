@@ -27,9 +27,29 @@ run_with_filtered_output() {
         set -e
     fi
 
-    grep -v "^\s*at " "$output_file" | grep -v "^\.\.\." | grep -v "^$" || true
+    sed '/^[[:space:]]*at /d;/^\.\.\./d;/^$/d' "$output_file" || true
     rm -f "$output_file"
     return "$status"
+}
+
+run_with_optional_timeout() {
+    local duration="$1"
+    local kill_after="$2"
+    shift 2
+
+    case "$duration" in
+        "" | 0 | none | off)
+            "$@"
+            return
+            ;;
+    esac
+
+    if ! command -v timeout >/dev/null 2>&1; then
+        echo "ERROR: timeout command is required when RODIN_BUILD_TIMEOUT is set" >&2
+        return 127
+    fi
+
+    timeout --kill-after="$kill_after" "$duration" "$@"
 }
 
 remove_exact_line() {

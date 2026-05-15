@@ -14,6 +14,10 @@ Commands:
   probcli [args...]              Run probcli directly
   help                           Show this help
 
+Environment:
+  RODIN_BUILD_TIMEOUT            Rodin build timeout (default: 60m; off disables)
+  RODIN_BUILD_TIMEOUT_KILL_AFTER Grace period after timeout (default: 30s)
+
 Examples:
   ./rodin model.zip
   ./rodin build model.zip

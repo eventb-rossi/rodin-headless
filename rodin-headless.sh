@@ -148,11 +148,11 @@ for zip in "${ZIPS[@]}"; do
     projname=""
     for bcm_file in "$srcdir"/*.bcm; do
         [ -f "$bcm_file" ] || continue
-        projname=$(grep -oP -m1 'org.eventb.core.source="/\K[^/]+' "$bcm_file" || true)
+        projname=$(sed -n 's|.*org.eventb.core.source="/\([^/"]*\).*|\1|p' "$bcm_file" | head -1 || true)
         [ -n "$projname" ] && break
     done
     if [ -z "$projname" ] && [ -f "$srcdir/.project" ]; then
-        projname=$(grep -oP -m1 '(?<=<name>)[^<]+' "$srcdir/.project" || true)
+        projname=$(sed -n 's|.*<name>\([^<]*\)</name>.*|\1|p' "$srcdir/.project" | head -1 || true)
     fi
     # Fall back if empty or would collide with an existing workspace project
     if [ -z "$projname" ] || [ -d "$WORKSPACE/$projname" ]; then

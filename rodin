@@ -10,6 +10,7 @@ set -euo pipefail
 
 IMAGE="rodin-headless"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PLATFORM_ARGS=()
 
 case "${1:-}" in
     help|--help|-h)
@@ -27,19 +28,50 @@ else
     exit 1
 fi
 
+# Rodin and ProB only publish Linux x86_64 artifacts for the container path.
+# On Apple Silicon, build an amd64 image so those binaries can run under
+# Docker/Podman emulation instead of being unpacked into an arm64 image.
+if [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then
+    PLATFORM_ARGS=(--platform linux/amd64)
+fi
+
+image_needs_build() {
+    local image_arch
+
+    if ! "$RUNTIME" image inspect "$IMAGE" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    if [ ${#PLATFORM_ARGS[@]} -gt 0 ]; then
+        image_arch="$("$RUNTIME" image inspect --format '{{.Architecture}}' "$IMAGE" 2>/dev/null || true)"
+        case "$image_arch" in
+            amd64|x86_64)
+                return 1
+                ;;
+            *)
+                return 0
+                ;;
+        esac
+    fi
+
+    return 1
+}
+
 # Auto-detect SELinux volume flag
 VOLUME_FLAG=""
 if [ -f /etc/selinux/config ] && grep -q 'SELINUX=enforcing' /etc/selinux/config 2>/dev/null; then
     VOLUME_FLAG=":Z"
 fi
 
-# Build image if not present
-if ! "$RUNTIME" image inspect "$IMAGE" >/dev/null 2>&1; then
-    echo "Building $IMAGE image (first run)..."
-    "$RUNTIME" build -t "$IMAGE" "$SCRIPT_DIR"
+# Build image if not present, or if an existing Apple Silicon image has the
+# wrong architecture for Rodin/ProB's Linux x86_64 binaries.
+if image_needs_build; then
+    echo "Building $IMAGE image..."
+    "$RUNTIME" build "${PLATFORM_ARGS[@]}" -t "$IMAGE" "$SCRIPT_DIR"
 fi
 
 exec "$RUNTIME" run --rm \
+    "${PLATFORM_ARGS[@]}" \
     -e RODIN_BUILD_TIMEOUT \
     -e RODIN_BUILD_TIMEOUT_KILL_AFTER \
     -v "$(pwd):/models${VOLUME_FLAG}" \

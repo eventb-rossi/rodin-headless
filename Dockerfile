@@ -45,7 +45,8 @@ ARG RODIN_TARBALL=
 COPY --chmod=755 rodin-version.sh prob-version.sh /tmp/
 
 RUN if [ -z "$RODIN_TARBALL" ]; then \
-        eval "$(/tmp/rodin-version.sh "$RODIN_VERSION")"; \
+        rodin_env="$(/tmp/rodin-version.sh "$RODIN_VERSION")" \
+        && eval "$rodin_env"; \
     else \
         RODIN_URL="https://sourceforge.net/projects/rodin-b-sharp/files/Core_Rodin_Platform/${RODIN_VERSION}/${RODIN_TARBALL}/download"; \
     fi \
@@ -66,7 +67,8 @@ ARG PROB_VERSION=latest
 # The matching Eclipse release site provides version-compatible GEF.
 # Eclipse version is read from Rodin's .eclipseproduct and mapped to a release name
 # using the quarterly cadence: 4.24=2022-06, each +1 minor = +3 months.
-RUN eval "$(/tmp/prob-version.sh "$PROB_VERSION")" \
+RUN prob_env="$(/tmp/prob-version.sh "$PROB_VERSION")" \
+    && eval "$prob_env" \
     && echo "Installing ProB $PROB_VERSION" \
     && curl -fSL --retry 3 --retry-delay 5 --max-time 300 \
         -o /tmp/prob.tar.gz "$PROB_URL" \

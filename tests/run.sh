@@ -142,6 +142,104 @@ EOF
         "rodin-version should fetch the tarball for the selected release candidate"
 }
 
+test_prob_version_uses_highest_release() {
+    local tmpbin output
+    tmpbin="$(new_tmpdir)"
+
+    cat > "$tmpbin/curl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+url="${@: -1}"
+
+case "$url" in
+    */downloads/prob/tcltk/releases/)
+        cat <<'OUT'
+<a href="1.15.9/">1.15.9/</a>
+<a href="1.15.10/">1.15.10/</a>
+<a href="1.16.0-beta/">1.16.0-beta/</a>
+OUT
+        ;;
+    *)
+        printf 'unexpected url: %s\n' "$url" >&2
+        exit 1
+        ;;
+esac
+EOF
+    chmod +x "$tmpbin/curl"
+
+    output="$(PATH="$tmpbin:$PATH" "$ROOT_DIR/prob-version.sh")"
+
+    assert_contains "$output" "export PROB_VERSION='1.15.10'" \
+        "prob-version should select the highest stable release"
+    assert_contains "$output" "export PROB_URL='https://stups.hhu-hosting.de/downloads/prob/tcltk/releases/1.15.10/ProB.linux64.tar.gz'" \
+        "prob-version should emit the selected release download URL"
+}
+
+test_rodin_build_forces_amd64_on_apple_silicon() {
+    local tmpbin build_args_file run_args_file build_args run_args
+    tmpbin="$(new_tmpdir)"
+    build_args_file="$tmpbin/docker.build.args"
+    run_args_file="$tmpbin/docker.run.args"
+
+    cat > "$tmpbin/docker" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+case "$1 $2" in
+    "image inspect")
+        exit 1
+        ;;
+esac
+
+case "$1" in
+    build)
+        printf '<%s>\n' "$@" > "$RODIN_TEST_BUILD_ARGS"
+        exit 0
+        ;;
+    run)
+        printf '<%s>\n' "$@" > "$RODIN_TEST_RUN_ARGS"
+        exit 0
+        ;;
+    *)
+        printf 'unexpected docker args: %s\n' "$*" >&2
+        exit 1
+        ;;
+esac
+EOF
+    cat > "$tmpbin/uname" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+case "${1:-}" in
+    -s)
+        printf '%s\n' Darwin
+        ;;
+    -m)
+        printf '%s\n' arm64
+        ;;
+    *)
+        /usr/bin/uname "$@"
+        ;;
+esac
+EOF
+    chmod +x "$tmpbin/docker" "$tmpbin/uname"
+
+    RODIN_TEST_BUILD_ARGS="$build_args_file" \
+    RODIN_TEST_RUN_ARGS="$run_args_file" \
+    PATH="$tmpbin:$PATH" \
+        "$ROOT_DIR/rodin" build model.zip
+
+    build_args="$(cat "$build_args_file")"
+    run_args="$(cat "$run_args_file")"
+    assert_contains "$build_args" "<--platform>
+<linux/amd64>" \
+        "rodin wrapper should force amd64 image builds on Apple Silicon"
+    assert_contains "$run_args" "<--platform>
+<linux/amd64>" \
+        "rodin wrapper should force amd64 container runs on Apple Silicon"
+}
+
 test_rodin_forwards_timeout_environment() {
     local tmpbin args_file args
     tmpbin="$(new_tmpdir)"
@@ -153,6 +251,9 @@ set -euo pipefail
 
 case "$1 $2" in
     "image inspect")
+        if [ "${3:-}" = "--format" ]; then
+            printf '%s\n' amd64
+        fi
         exit 0
         ;;
 esac
@@ -282,18 +383,31 @@ EOF
 }
 
 test_run_with_optional_timeout_preserves_success_status() {
-    local tmpdir command status
+    local tmpdir tmpbin command status
     tmpdir="$(new_tmpdir)"
+    tmpbin="$(new_tmpdir)"
     command="$tmpdir/success-command.sh"
 
     cat > "$command" <<'EOF'
 #!/usr/bin/env bash
 exit 3
 EOF
+    cat > "$tmpbin/timeout" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+while [[ "${1:-}" == --* ]]; do
+    shift
+done
+shift
+exec "$@"
+EOF
     chmod +x "$command"
+    chmod +x "$tmpbin/timeout"
 
     set +e
     (
+        PATH="$tmpbin:$PATH"
         . "$ROOT_DIR/rodin-headless-lib.sh"
         run_with_optional_timeout 5s 1s "$command"
     )
@@ -328,10 +442,18 @@ EOF
 }
 
 test_run_with_optional_timeout_reports_timeout() {
-    local status
+    local tmpbin status
+    tmpbin="$(new_tmpdir)"
+
+    cat > "$tmpbin/timeout" <<'EOF'
+#!/usr/bin/env bash
+exit 124
+EOF
+    chmod +x "$tmpbin/timeout"
 
     set +e
     (
+        PATH="$tmpbin:$PATH"
         . "$ROOT_DIR/rodin-headless-lib.sh"
         run_with_optional_timeout 1s 1s sleep 2
     )
@@ -432,6 +554,8 @@ test_validate_deadlock_check_uses_eventb_true_ast() {
         "validate should pass the translated TRUE predicate into deadlock checking"
     assert_not_contains "$script" "new CompoundPrologTerm(\"truth\")" \
         "validate should not pass the unsupported truth atom to ProB"
+    assert_not_contains "$script" "grep -oP" \
+        "headless script should avoid GNU-only grep -P"
 }
 
 test_dockerfile_installs_headless_helper() {
@@ -443,11 +567,17 @@ test_dockerfile_installs_headless_helper() {
         "Dockerfile should copy the headless helper into the image"
     assert_contains "$dockerfile" "/usr/local/bin/" \
         "Dockerfile should install the headless scripts in /usr/local/bin"
+    assert_contains "$dockerfile" 'rodin_env="$(/tmp/rodin-version.sh "$RODIN_VERSION")"' \
+        "Dockerfile should preserve Rodin version helper failures"
+    assert_contains "$dockerfile" 'prob_env="$(/tmp/prob-version.sh "$PROB_VERSION")"' \
+        "Dockerfile should preserve ProB version helper failures"
 }
 
 main() {
     test_rodin_help_skips_runtime
     test_rodin_version_uses_highest_release
+    test_prob_version_uses_highest_release
+    test_rodin_build_forces_amd64_on_apple_silicon
     test_rodin_forwards_timeout_environment
     test_rodin_headless_rejects_missing_archives
     test_find_archive_project_root_supports_context_only_models

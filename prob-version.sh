@@ -17,14 +17,23 @@ SAFE_PATTERN='^[a-zA-Z0-9._-]+$'
 
 MODE="${1:-latest}"
 
+latest_by_numbers() {
+    awk '{ key = $0; gsub(/[^0-9]+/, ".", key); print key "\t" $0 }' \
+        | sort -t . -k1,1n -k2,2n -k3,3n -k4,4n \
+        | tail -1 \
+        | cut -f2-
+}
+
 case "$MODE" in
     latest)
         # Directory listing has href="VERSION/" entries; pick latest stable
-        # (digits and dots only, no beta/RC suffixes). sort -V for version sort.
-        VERSION=$(curl -fsSL --retry 2 --max-time 30 "$PROB_BASE/" \
-            | grep -oP 'href="\K[0-9][^/"]*' \
-            | grep -xP '[0-9]+(\.[0-9]+)*' \
-            | sort -V | tail -1)
+        # (digits and dots only, no beta/RC suffixes).
+        listing=$(curl -fsSL --retry 2 --max-time 30 "$PROB_BASE/")
+        versions=$(printf '%s\n' "$listing" \
+            | grep -Eo 'href="[0-9][^/"]*/"' \
+            | sed 's/^href="//;s|/"$||' || true)
+        candidates=$(printf '%s\n' "$versions" | grep -E '^[0-9]+(\.[0-9]+)*$' || true)
+        VERSION=$(printf '%s\n' "$candidates" | latest_by_numbers)
         ;;
     *)
         VERSION="$MODE"

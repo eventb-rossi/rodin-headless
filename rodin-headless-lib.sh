@@ -62,18 +62,50 @@ remove_exact_line() {
     mv "$temp_file" "$file_path"
 }
 
+resolve_latest_path() {
+    local search_dir="$1"
+    local bundle_name="$2"
+    local path_type="$3"
+    local name_pattern
+    local find_type
+
+    case "$path_type" in
+        file)
+            name_pattern="${bundle_name}_*.jar"
+            find_type=f
+            ;;
+        dir)
+            name_pattern="${bundle_name}_*"
+            find_type=d
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+
+    find "$search_dir" -maxdepth 1 -type "$find_type" -name "$name_pattern" -print \
+        | while IFS= read -r path; do
+            name="${path##*/}"
+            version="${name#"$bundle_name"_}"
+            version="${version%.jar}"
+            printf '%s\t%s\n' "$version" "$path"
+        done \
+        | awk -F '\t' '{ key = $1; gsub(/[^0-9]+/, ".", key); print key "\t" $2 }' \
+        | sort -t . -k1,1n -k2,2n -k3,3n -k4,4n \
+        | tail -1 \
+        | cut -f2-
+}
+
 resolve_latest_jar() {
     local search_dir="$1"
     local bundle_name="$2"
 
-    find "$search_dir" -maxdepth 1 -type f -name "${bundle_name}_*.jar" -print \
-        | sort -V | tail -1
+    resolve_latest_path "$search_dir" "$bundle_name" file
 }
 
 resolve_latest_dir() {
     local search_dir="$1"
     local bundle_name="$2"
 
-    find "$search_dir" -maxdepth 1 -type d -name "${bundle_name}_*" -print \
-        | sort -V | tail -1
+    resolve_latest_path "$search_dir" "$bundle_name" dir
 }

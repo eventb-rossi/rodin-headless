@@ -135,6 +135,18 @@ docker build \
   -t rodin-headless .
 ```
 
+On Apple Silicon Macs, build the image for `linux/amd64`. Rodin and ProB
+publish Linux x86_64 archives for the container path, so native `linux/arm64`
+images will unpack binaries that cannot run:
+
+```bash
+docker build --platform linux/amd64 -t rodin-headless .
+podman build --platform linux/amd64 -t rodin-headless .
+```
+
+The `./rodin` wrapper applies this platform flag automatically when it builds
+and runs the image on macOS ARM64.
+
 The `rodin-version.sh` helper script can also be used standalone to query the highest available stable or RC version:
 
 ```bash

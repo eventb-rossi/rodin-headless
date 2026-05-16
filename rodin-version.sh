@@ -19,16 +19,29 @@ SAFE_PATTERN='^[a-zA-Z0-9._-]+$'
 
 MODE="${1:-latest}"
 
+latest_by_numbers() {
+    awk '{ key = $0; gsub(/[^0-9]+/, ".", key); print key "\t" $0 }' \
+        | sort -t . -k1,1n -k2,2n -k3,3n -k4,4n \
+        | tail -1 \
+        | cut -f2-
+}
+
 case "$MODE" in
     latest)
-        versions=$(curl -fsSL --retry 2 --max-time 30 "$SF_BASE/" \
-            | grep -oP '"name":"\K[^"]+')
-        VERSION=$(echo "$versions" | grep -xP '[0-9]+(\.[0-9]+)*' | sort -V | tail -1)
+        listing=$(curl -fsSL --retry 2 --max-time 30 "$SF_BASE/")
+        versions=$(printf '%s\n' "$listing" \
+            | grep -Eo '"name":"[^"]+"' \
+            | cut -d'"' -f4 || true)
+        candidates=$(printf '%s\n' "$versions" | grep -E '^[0-9]+(\.[0-9]+)*$' || true)
+        VERSION=$(printf '%s\n' "$candidates" | latest_by_numbers)
         ;;
     latest-rc)
-        versions=$(curl -fsSL --retry 2 --max-time 30 "$SF_BASE/" \
-            | grep -oP '"name":"\K[^"]+')
-        VERSION=$(echo "$versions" | grep -xP '[0-9]+(\.[0-9]+)*-RC[0-9]*' | sort -V | tail -1)
+        listing=$(curl -fsSL --retry 2 --max-time 30 "$SF_BASE/")
+        versions=$(printf '%s\n' "$listing" \
+            | grep -Eo '"name":"[^"]+"' \
+            | cut -d'"' -f4 || true)
+        candidates=$(printf '%s\n' "$versions" | grep -E '^[0-9]+(\.[0-9]+)*-RC[0-9]*$' || true)
+        VERSION=$(printf '%s\n' "$candidates" | latest_by_numbers)
         ;;
     *)
         VERSION="$MODE"
@@ -41,8 +54,9 @@ if [ -z "$VERSION" ]; then
 fi
 
 # Resolve the Linux x86_64 tarball filename
-TARBALL=$(curl -fsSL --retry 2 --max-time 30 "$SF_BASE/$VERSION/" \
-    | grep -oP 'rodin-[^"]*-linux\.gtk\.x86_64\.tar\.gz' | head -1)
+listing=$(curl -fsSL --retry 2 --max-time 30 "$SF_BASE/$VERSION/")
+TARBALL=$(printf '%s\n' "$listing" \
+    | grep -Eo 'rodin-[^"]*-linux\.gtk\.x86_64\.tar\.gz' | head -1 || true)
 
 if [ -z "$TARBALL" ]; then
     echo "ERROR: Could not find Linux tarball for Rodin $VERSION" >&2

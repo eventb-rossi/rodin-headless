@@ -872,10 +872,21 @@ test_dockerfile_installs_headless_helper() {
         "Dockerfile should copy the headless helper into the image"
     assert_contains "$dockerfile" "/usr/local/bin/" \
         "Dockerfile should install the headless scripts in /usr/local/bin"
-    assert_contains "$dockerfile" 'rodin_env="$(/tmp/rodin-version.sh "$RODIN_VERSION")"' \
-        "Dockerfile should preserve Rodin version helper failures"
-    assert_contains "$dockerfile" 'prob_env="$(/tmp/prob-version.sh "$PROB_VERSION")"' \
-        "Dockerfile should preserve ProB version helper failures"
+    assert_contains "$dockerfile" \
+        "COPY --chmod=755 rodin-install.sh rodin-version.sh prob-version.sh rodin-headless-lib.sh" \
+        "Dockerfile should copy the shared installer and its helpers"
+    assert_contains "$dockerfile" '--prefix /opt --only rodin' \
+        "Dockerfile should install Rodin via the shared installer"
+    assert_contains "$dockerfile" '--rodin-version "$RODIN_VERSION"' \
+        "Dockerfile should forward the Rodin version build argument"
+    assert_contains "$dockerfile" '${RODIN_TARBALL:+--rodin-tarball "$RODIN_TARBALL"}' \
+        "Dockerfile should forward the optional tarball override"
+    assert_contains "$dockerfile" '--prefix /opt --only prob' \
+        "Dockerfile should install ProB via the shared installer"
+    assert_contains "$dockerfile" '--prob-version "$PROB_VERSION"' \
+        "Dockerfile should forward the ProB version build argument"
+    assert_contains "$dockerfile" "ln -s /opt/prob/probcli /usr/local/bin/probcli" \
+        "Dockerfile should expose probcli on the container PATH"
 }
 
 main() {

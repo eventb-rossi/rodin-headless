@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+run_probcli() {
+    if ! command -v probcli >/dev/null 2>&1; then
+        echo "Error: probcli not found on PATH." >&2
+        echo "Run ./rodin-install.sh to install ProB, or add <prefix>/prob to PATH." >&2
+        exit 1
+    fi
+    exec probcli "$@"
+}
+
 usage() {
     cat <<'EOF'
 Usage: ./rodin <command> [args...]
@@ -30,12 +41,12 @@ EOF
 }
 
 case "${1:-}" in
-    build)    shift; exec rodin-headless.sh "$@" ;;
-    check)    shift; exec rodin-headless.sh --mode check "$@" ;;
-    prove)    shift; exec rodin-headless.sh --mode prove "$@" ;;
-    validate)  shift; exec rodin-headless.sh --mode validate "$@" ;;
-    autoprove) shift; exec rodin-headless.sh --mode autoprove "$@" ;;
-    probcli)   shift; exec probcli "$@" ;;
+    build)    shift; exec "$SCRIPT_DIR/rodin-headless.sh" "$@" ;;
+    check)    shift; exec "$SCRIPT_DIR/rodin-headless.sh" --mode check "$@" ;;
+    prove)    shift; exec "$SCRIPT_DIR/rodin-headless.sh" --mode prove "$@" ;;
+    validate)  shift; exec "$SCRIPT_DIR/rodin-headless.sh" --mode validate "$@" ;;
+    autoprove) shift; exec "$SCRIPT_DIR/rodin-headless.sh" --mode autoprove "$@" ;;
+    probcli)   shift; run_probcli "$@" ;;
     help|--help|-h) usage; exit 0 ;;
-    *)        exec rodin-headless.sh "$@" ;;
+    *)        exec "$SCRIPT_DIR/rodin-headless.sh" "$@" ;;
 esac

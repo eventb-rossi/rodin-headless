@@ -50,18 +50,18 @@ fi
 # is only created further down.
 WORKSPACE=""
 PLUGIN_DIR=""
+LOCK_HELD=""
 cleanup() {
     # rm -f treats empty operands as already-removed, so the not-yet-set
     # case needs no guard.
     rm -rf "$WORKSPACE" "$PLUGIN_DIR"
-    if [ -n "${LOCK_FD:-}" ]; then
+    if [ -n "$LOCK_HELD" ]; then
         rm -f "$RODIN_PLUGINS/$BUNDLE_JAR_NAME"
         if [ -f "$BUNDLES_INFO" ]; then
             remove_exact_line "$BUNDLES_INFO" "$BUNDLE_INFO_LINE"
         fi
-        flock -u "$LOCK_FD" || true
-        exec {LOCK_FD}>&-
-        unset LOCK_FD
+        release_rodin_lock
+        LOCK_HELD=""
     fi
     [ -n "${XVFB_PID:-}" ] && kill "$XVFB_PID" 2>/dev/null || true
 }
@@ -94,7 +94,9 @@ fi
 
 ZIPS=()
 MISSING_ZIPS=()
-for zip in "${SELECTED_ZIPS[@]}"; do
+# ${arr[@]+...} keeps empty-array expansions alive under bash 3.2's
+# set -u (stock macOS), where a bare "${arr[@]}" is fatal.
+for zip in ${SELECTED_ZIPS[@]+"${SELECTED_ZIPS[@]}"}; do
     zip=$(basename "$zip")
     if [ -f "$MODELS_DIR/$zip" ]; then
         ZIPS+=("$zip")
@@ -103,7 +105,7 @@ for zip in "${SELECTED_ZIPS[@]}"; do
     fi
 done
 
-for zip in "${MISSING_ZIPS[@]}"; do
+for zip in ${MISSING_ZIPS[@]+"${MISSING_ZIPS[@]}"}; do
     echo "  SKIP: $zip not found" >&2
 done
 
@@ -141,7 +143,9 @@ BUNDLE_INFO_LINE="$BUNDLE_SYMBOLIC_NAME,$BUNDLE_VERSION,plugins/$BUNDLE_JAR_NAME
 APPLICATION_ID="$BUNDLE_SYMBOLIC_NAME.headlessBuilder"
 RODIN_BUILD_TIMEOUT="${RODIN_BUILD_TIMEOUT:-60m}"
 RODIN_BUILD_TIMEOUT_KILL_AFTER="${RODIN_BUILD_TIMEOUT_KILL_AFTER:-30s}"
-declare -A ZIP_TO_PROJECT  # maps zip basename → workspace project name
+# Workspace project name per archive, index-parallel to ZIPS — bash 3.2
+# (stock macOS) has no associative arrays.
+ZIP_PROJECTS=()
 
 echo "Workspace: $WORKSPACE"
 echo "Processing ${#ZIPS[@]} archives"
@@ -149,6 +153,7 @@ echo
 
 # --- Step 1: Extract archives into workspace ---
 echo "=== Step 1: Extracting archives ==="
+zip_index=0
 for zip in "${ZIPS[@]}"; do
     m="${zip%.zip}"
 
@@ -207,7 +212,8 @@ for zip in "${ZIPS[@]}"; do
 </projectDescription>
 EOF
     fi
-    ZIP_TO_PROJECT["$zip"]="$projname"
+    ZIP_PROJECTS[$zip_index]="$projname"
+    zip_index=$((zip_index + 1))
     echo "  $m → $projname"
 done
 echo
@@ -487,8 +493,8 @@ echo
 echo "=== Step 3: Running Rodin headless builder ==="
 # Install plugin to plugins/ directory and register in bundles.info.
 # Hold the lock until cleanup so concurrent standalone runs cannot clobber the bundle.
-exec {LOCK_FD}> "$LOCK_FILE"
-flock "$LOCK_FD"
+acquire_rodin_lock "$LOCK_FILE"
+LOCK_HELD=1
 cp "$PLUGIN_DIR/$BUNDLE_JAR_NAME" "$RODIN_PLUGINS/$BUNDLE_JAR_NAME"
 if [ -f "$BUNDLES_INFO" ]; then
     echo "$BUNDLE_INFO_LINE" >> "$BUNDLES_INFO"
@@ -525,8 +531,11 @@ esac
 # --- Step 4: Check results and repackage ---
 echo "=== Step 4: Repackaging archives ==="
 
+zip_index=0
 for zip in "${ZIPS[@]}"; do
     m="${zip%.zip}"
+    this_zip_index=$zip_index
+    zip_index=$((zip_index + 1))
 
     # Extract original zip
     tmpdir=$(mktemp -d)
@@ -540,8 +549,8 @@ for zip in "${ZIPS[@]}"; do
     fi
 
     projdir=""
-    if [ -n "${ZIP_TO_PROJECT[$zip]:-}" ]; then
-        candidate="$WORKSPACE/${ZIP_TO_PROJECT[$zip]}"
+    if [ -n "${ZIP_PROJECTS[$this_zip_index]:-}" ]; then
+        candidate="$WORKSPACE/${ZIP_PROJECTS[$this_zip_index]}"
         if [ -d "$candidate" ]; then
             projdir="$candidate"
         fi

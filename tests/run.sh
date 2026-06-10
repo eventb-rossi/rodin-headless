@@ -7,7 +7,9 @@ TEST_TMPDIRS=()
 
 cleanup() {
     local dir
-    for dir in "${TEST_TMPDIRS[@]:-}"; do
+    # ${arr[@]+...} keeps the empty-array case alive under bash 3.2's
+    # set -u (stock macOS), where "${arr[@]:-}" yields a bogus empty word.
+    for dir in ${TEST_TMPDIRS[@]+"${TEST_TMPDIRS[@]}"}; do
         rm -rf "$dir"
     done
 }
@@ -104,6 +106,56 @@ esac
 printf '<%s>\n' "$@" > "$RODIN_TEST_ARGS"
 EOF
     chmod +x "$tmpbin/docker"
+}
+
+# Stub docker so `image inspect` reports no image and build/run record
+# their args to $RODIN_TEST_BUILD_ARGS / $RODIN_TEST_RUN_ARGS.
+make_docker_buildrun_stub() {
+    local tmpbin="$1"
+
+    cat > "$tmpbin/docker" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+case "$1 $2" in
+    "image inspect")
+        exit 1
+        ;;
+esac
+
+case "$1" in
+    build)
+        printf '<%s>\n' "$@" > "$RODIN_TEST_BUILD_ARGS"
+        exit 0
+        ;;
+    run)
+        printf '<%s>\n' "$@" > "$RODIN_TEST_RUN_ARGS"
+        exit 0
+        ;;
+    *)
+        printf 'unexpected docker args: %s\n' "$*" >&2
+        exit 1
+        ;;
+esac
+EOF
+    chmod +x "$tmpbin/docker"
+}
+
+# Stub uname so platform detection sees the given OS and architecture.
+make_uname_stub() {
+    local tmpbin="$1" os="$2" arch="$3"
+
+    cat > "$tmpbin/uname" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+
+case "\${1:-}" in
+    -s) printf '%s\n' "$os" ;;
+    -m) printf '%s\n' "$arch" ;;
+    *)  /usr/bin/uname "\$@" ;;
+esac
+EOF
+    chmod +x "$tmpbin/uname"
 }
 
 test_rodin_help_skips_runtime() {
@@ -214,48 +266,8 @@ test_rodin_build_forces_amd64_on_apple_silicon() {
     build_args_file="$tmpbin/docker.build.args"
     run_args_file="$tmpbin/docker.run.args"
 
-    cat > "$tmpbin/docker" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-
-case "$1 $2" in
-    "image inspect")
-        exit 1
-        ;;
-esac
-
-case "$1" in
-    build)
-        printf '<%s>\n' "$@" > "$RODIN_TEST_BUILD_ARGS"
-        exit 0
-        ;;
-    run)
-        printf '<%s>\n' "$@" > "$RODIN_TEST_RUN_ARGS"
-        exit 0
-        ;;
-    *)
-        printf 'unexpected docker args: %s\n' "$*" >&2
-        exit 1
-        ;;
-esac
-EOF
-    cat > "$tmpbin/uname" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-
-case "${1:-}" in
-    -s)
-        printf '%s\n' Darwin
-        ;;
-    -m)
-        printf '%s\n' arm64
-        ;;
-    *)
-        /usr/bin/uname "$@"
-        ;;
-esac
-EOF
-    chmod +x "$tmpbin/docker" "$tmpbin/uname"
+    make_docker_buildrun_stub "$tmpbin"
+    make_uname_stub "$tmpbin" Darwin arm64
 
     RODIN_TEST_BUILD_ARGS="$build_args_file" \
     RODIN_TEST_RUN_ARGS="$run_args_file" \
@@ -272,6 +284,32 @@ EOF
     assert_contains "$run_args" "<--platform>
 <linux/amd64>" \
         "rodin wrapper should force amd64 container runs on Apple Silicon"
+}
+
+test_rodin_build_omits_platform_on_x86_64() {
+    local tmpbin build_args_file run_args_file build_args run_args
+    tmpbin="$(new_tmpdir)"
+    build_args_file="$tmpbin/docker.build.args"
+    run_args_file="$tmpbin/docker.run.args"
+
+    make_docker_buildrun_stub "$tmpbin"
+    make_uname_stub "$tmpbin" Linux x86_64
+
+    # Regression test: with no platform override the wrapper must expand
+    # an empty array, which is fatal on bash 3.2 with set -u when unguarded.
+    RODIN_TEST_BUILD_ARGS="$build_args_file" \
+    RODIN_TEST_RUN_ARGS="$run_args_file" \
+    RODIN_DIR="" \
+    RODIN_PREFIX="$tmpbin" \
+    PATH="$tmpbin:$PATH" \
+        "$ROOT_DIR/rodin" build model.zip
+
+    build_args="$(cat "$build_args_file")"
+    run_args="$(cat "$run_args_file")"
+    assert_not_contains "$build_args" "<--platform>" \
+        "rodin wrapper should not force a platform on x86_64 hosts"
+    assert_not_contains "$run_args" "<--platform>" \
+        "rodin wrapper should not force a platform on x86_64 hosts"
 }
 
 test_rodin_forwards_timeout_environment() {
@@ -553,6 +591,167 @@ EOF
         "timeout wrapper should return GNU timeout's timeout status"
 }
 
+test_timeout_duration_parsing() {
+    local seconds
+
+    seconds="$(
+        . "$ROOT_DIR/rodin-headless-lib.sh"
+        timeout_duration_to_seconds 60m
+    )"
+    assert_eq "3600" "$seconds" "duration parsing should convert minutes"
+
+    seconds="$(
+        . "$ROOT_DIR/rodin-headless-lib.sh"
+        timeout_duration_to_seconds 30s
+    )"
+    assert_eq "30" "$seconds" "duration parsing should convert seconds"
+
+    seconds="$(
+        . "$ROOT_DIR/rodin-headless-lib.sh"
+        timeout_duration_to_seconds 7
+    )"
+    assert_eq "7" "$seconds" "duration parsing should accept plain seconds"
+
+    seconds="$(
+        . "$ROOT_DIR/rodin-headless-lib.sh"
+        timeout_duration_to_seconds 2h
+    )"
+    assert_eq "7200" "$seconds" "duration parsing should convert hours"
+
+    assert_fails_with "invalid timeout duration" \
+        bash -c ". '$ROOT_DIR/rodin-headless-lib.sh'; timeout_duration_to_seconds 5x"
+    assert_fails_with "invalid timeout duration" \
+        bash -c ". '$ROOT_DIR/rodin-headless-lib.sh'; timeout_duration_to_seconds m"
+}
+
+test_watchdog_timeout_preserves_command_status() {
+    local tmpdir command status
+    tmpdir="$(new_tmpdir)"
+    command="$tmpdir/fail-command.sh"
+
+    printf '#!/bin/sh\nexit 6\n' > "$command"
+    chmod +x "$command"
+
+    set +e
+    (
+        . "$ROOT_DIR/rodin-headless-lib.sh"
+        run_with_watchdog_timeout 5s 1s "$command"
+    )
+    status=$?
+    set -e
+
+    assert_eq "6" "$status" \
+        "watchdog timeout should preserve the command's exit status"
+}
+
+test_watchdog_timeout_kills_overrunning_command() {
+    local status
+
+    set +e
+    (
+        . "$ROOT_DIR/rodin-headless-lib.sh"
+        run_with_watchdog_timeout 1s 1s sleep 10
+    )
+    status=$?
+    set -e
+
+    assert_eq "124" "$status" \
+        "watchdog timeout should report 124 when the command overruns"
+}
+
+test_run_with_optional_timeout_falls_back_to_gtimeout() {
+    local tmpbin args_file args
+    tmpbin="$(new_tmpdir)"
+    args_file="$tmpbin/gtimeout.args"
+
+    cat > "$tmpbin/gtimeout" <<'EOF'
+#!/bin/sh
+printf '<%s>\n' "$@" > "$RODIN_TEST_ARGS"
+EOF
+    chmod +x "$tmpbin/gtimeout"
+
+    # PATH holds only the stub, so no real `timeout` can win; the
+    # builtins the lib needs (command, printf) survive an empty PATH.
+    (
+        export RODIN_TEST_ARGS="$args_file"
+        PATH="$tmpbin"
+        . "$ROOT_DIR/rodin-headless-lib.sh"
+        run_with_optional_timeout 5s 1s true
+    )
+
+    args="$(cat "$args_file")"
+    assert_contains "$args" "<--kill-after=1s>" \
+        "gtimeout fallback should forward the kill-after grace period"
+    assert_contains "$args" "<5s>" \
+        "gtimeout fallback should forward the timeout duration"
+}
+
+test_lock_helpers_acquire_and_release() {
+    local tmpdir lock_file
+    tmpdir="$(new_tmpdir)"
+    lock_file="$tmpdir/test.lock"
+
+    (
+        . "$ROOT_DIR/rodin-headless-lib.sh"
+        acquire_rodin_lock "$lock_file"
+        release_rodin_lock
+        acquire_rodin_lock "$lock_file"
+        release_rodin_lock
+    ) || fail "lock helpers should support repeated acquire/release cycles"
+}
+
+# Restrict PATH to the external tools the mkdir spinlock needs, so
+# flock is never found and the fallback branch runs on any host.
+make_spinlock_path() {
+    local tmpbin="$1" tool
+
+    for tool in mkdir rm cat date sleep; do
+        ln -s "$(command -v "$tool")" "$tmpbin/$tool"
+    done
+}
+
+test_lock_helpers_mkdir_fallback_without_flock() {
+    local tmpdir tmpbin lock_file
+    tmpdir="$(new_tmpdir)"
+    tmpbin="$(new_tmpdir)"
+    lock_file="$tmpdir/test.lock"
+
+    make_spinlock_path "$tmpbin"
+
+    (
+        PATH="$tmpbin"
+        . "$ROOT_DIR/rodin-headless-lib.sh"
+        acquire_rodin_lock "$lock_file"
+        [ "$RODIN_LOCK_KIND" = dir ] || exit 1
+        [ -f "$lock_file.d/pid" ] || exit 1
+        release_rodin_lock
+        [ ! -e "$lock_file.d" ] || exit 1
+    ) || fail "mkdir spinlock should acquire and release without flock"
+}
+
+test_lock_helpers_reclaim_stale_lock() {
+    local tmpdir tmpbin lock_file
+    tmpdir="$(new_tmpdir)"
+    tmpbin="$(new_tmpdir)"
+    lock_file="$tmpdir/test.lock"
+
+    make_spinlock_path "$tmpbin"
+
+    # A held lock whose recorded owner is long dead (out-of-range PID)
+    mkdir -p "$lock_file.d"
+    printf '%s\n' 4194304 > "$lock_file.d/pid"
+
+    (
+        PATH="$tmpbin"
+        . "$ROOT_DIR/rodin-headless-lib.sh"
+        acquire_rodin_lock "$lock_file"
+        [ "$RODIN_LOCK_KIND" = dir ] || exit 1
+        read -r owner < "$lock_file.d/pid"
+        [ "$owner" != 4194304 ] || exit 1
+        release_rodin_lock
+    ) || fail "a stale mkdir spinlock should be reclaimed when its owner is dead"
+}
+
 test_rodin_headless_wraps_launch_with_timeout() {
     local script
     script="$(cat "$ROOT_DIR/rodin-headless.sh")"
@@ -705,7 +904,17 @@ EOF
 printf '<%s>\n' "$@" >> "$INSTALLER_TEST_JAVA_ARGS"
 exit 0
 EOF
-    chmod +x "$tmpbin/curl" "$tmpbin/java"
+    # Pin the platform the installer sees, so the suite runs on any
+    # host; tests override via INSTALLER_TEST_OS/INSTALLER_TEST_ARCH.
+    cat > "$tmpbin/uname" <<'EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+    -s) printf '%s\n' "${INSTALLER_TEST_OS:-Linux}" ;;
+    -m) printf '%s\n' "${INSTALLER_TEST_ARCH:-x86_64}" ;;
+    *)  /usr/bin/uname "$@" ;;
+esac
+EOF
+    chmod +x "$tmpbin/curl" "$tmpbin/java" "$tmpbin/uname"
 }
 
 # The fixtures and stubs are immutable, so they are built once for the
@@ -800,11 +1009,12 @@ test_installer_rodin_phase_is_idempotent() {
 
     assert_contains "$output" "already installed" \
         "second install run should skip an existing Rodin install"
-    assert_eq "1" "$(wc -l < "$INSTALLER_TEST_CURL_LOG")" \
+    # BSD wc pads its count with leading spaces
+    assert_eq "1" "$(wc -l < "$INSTALLER_TEST_CURL_LOG" | tr -d ' ')" \
         "second install run should not re-download the tarball"
 
     install_rodin_fixture --force > /dev/null
-    assert_eq "2" "$(wc -l < "$INSTALLER_TEST_CURL_LOG")" \
+    assert_eq "2" "$(wc -l < "$INSTALLER_TEST_CURL_LOG" | tr -d ' ')" \
         "--force should re-download and reinstall"
 }
 
@@ -910,6 +1120,7 @@ main() {
     test_rodin_version_uses_highest_release
     test_prob_version_uses_highest_release
     test_rodin_build_forces_amd64_on_apple_silicon
+    test_rodin_build_omits_platform_on_x86_64
     test_rodin_forwards_timeout_environment
     test_rodin_wrapper_prefers_native_install
     test_rodin_runtime_docker_overrides_native
@@ -922,6 +1133,13 @@ main() {
     test_run_with_optional_timeout_preserves_success_status
     test_run_with_optional_timeout_can_be_disabled
     test_run_with_optional_timeout_reports_timeout
+    test_timeout_duration_parsing
+    test_watchdog_timeout_preserves_command_status
+    test_watchdog_timeout_kills_overrunning_command
+    test_run_with_optional_timeout_falls_back_to_gtimeout
+    test_lock_helpers_acquire_and_release
+    test_lock_helpers_mkdir_fallback_without_flock
+    test_lock_helpers_reclaim_stale_lock
     test_rodin_headless_wraps_launch_with_timeout
     test_remove_exact_line_only_removes_matching_bundle_registration
     test_resolve_latest_plugin_paths_use_version_sorting

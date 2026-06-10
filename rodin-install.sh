@@ -237,7 +237,7 @@ install_rodin() {
     fi
     refuse_foreign_dir "$RODIN_INSTALL_DIR" rodin.ini
 
-    local rodin_env staging java_bin_dir
+    local rodin_env staging java_bin_dir ini_tmp
     rodin_env="$("$SCRIPT_DIR/rodin-version.sh" "$RODIN_VERSION_ARG" \
         ${RODIN_TARBALL_ARG:+"$RODIN_TARBALL_ARG"})"
     eval "$rodin_env"
@@ -252,10 +252,13 @@ install_rodin() {
     # Point Rodin at the JVM that will run it. Use the PATH entry's
     # directory without resolving symlinks — alternatives-style links
     # stay valid across JDK package upgrades, a resolved versioned
-    # directory does not.
+    # directory does not. Prepend via a temp file: BSD sed has no GNU
+    # -i/1i semantics.
     java_bin_dir="$(dirname "$(command -v java)")"
     if [ "$(head -1 "$staging/rodin.ini")" != "-vm" ]; then
-        sed -i "1i -vm\n$java_bin_dir" "$staging/rodin.ini"
+        ini_tmp="$(mktemp)"
+        printf -- '-vm\n%s\n' "$java_bin_dir" | cat - "$staging/rodin.ini" > "$ini_tmp"
+        mv "$ini_tmp" "$staging/rodin.ini"
     fi
 
     rm -rf "$RODIN_INSTALL_DIR"

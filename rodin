@@ -143,11 +143,13 @@ fi
 # wrong architecture for Rodin/ProB's Linux x86_64 binaries.
 if image_needs_build; then
     echo "Building $IMAGE image..."
-    "$RUNTIME" build "${PLATFORM_ARGS[@]}" -t "$IMAGE" "$SCRIPT_DIR"
+    # ${arr[@]+...} keeps the empty-array expansion alive under bash
+    # 3.2's set -u (stock macOS), where a bare "${arr[@]}" is fatal.
+    "$RUNTIME" build ${PLATFORM_ARGS[@]+"${PLATFORM_ARGS[@]}"} -t "$IMAGE" "$SCRIPT_DIR"
 fi
 
 exec "$RUNTIME" run --rm \
-    "${PLATFORM_ARGS[@]}" \
+    ${PLATFORM_ARGS[@]+"${PLATFORM_ARGS[@]}"} \
     -e RODIN_BUILD_TIMEOUT \
     -e RODIN_BUILD_TIMEOUT_KILL_AFTER \
     -v "$(pwd):/models${VOLUME_FLAG}" \

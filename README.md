@@ -1,14 +1,35 @@
-# rodin-docker
+# rodin-headless
 
-Docker image for headless [Rodin](https://wiki.event-b.org/index.php/Main_Page) Event-B model building, validation, and proving. Feed it `.zip` archives containing Event-B models and get back static-checked artifacts (`.bcm`/`.bcc`), model checking results, and proof obligation discharge reports.
+Headless toolchain for building, model-checking, and proving [Rodin](https://wiki.event-b.org/index.php/Main_Page) Event-B models — natively on Linux or via Docker. Feed it `.zip` archives containing Event-B models and get back static-checked artifacts (`.bcm`/`.bcc`), model checking results, and proof obligation discharge reports.
 
 ## Quick Start
 
 ```bash
+git clone https://github.com/eventb-rossi/rodin-headless.git
+cd rodin-headless
+
 ./rodin my-model.zip
 ```
 
-The `rodin` wrapper auto-builds the Docker image on first run and mounts the current directory. Built artifacts are written back into the zip in-place.
+The `rodin` wrapper picks a runtime automatically: a native Rodin install if one is present, otherwise the Docker image (auto-built on first run, current directory mounted). Built artifacts are written back into the zip in-place.
+
+### Native install (Linux x86_64)
+
+```bash
+./rodin-install.sh --check-deps   # report missing system packages
+./rodin-install.sh                # install Rodin + ProB + plugins
+./rodin my-model.zip              # now runs without Docker
+```
+
+The installer downloads Rodin and the ProB CLI, points `rodin.ini` at your JVM, and installs the ProB/SMT/Atelier B Rodin plugins — into `~/.local/share/rodin-headless` by default (override with `--prefix DIR` or `RODIN_PREFIX`). It never uses sudo; system packages (JDK 21+, GTK3, Xvfb, zip/unzip) are reported by `--check-deps` with install hints instead.
+
+```bash
+./rodin-install.sh [--prefix DIR] [--only rodin|prob] [--force]
+                   [--rodin-version V] [--rodin-tarball F] [--prob-version V]
+                   [--check-deps]
+```
+
+Re-running is safe: completed phases are skipped unless `--force` is given.
 
 ## Commands
 
@@ -27,7 +48,24 @@ The `rodin` wrapper auto-builds the Docker image on first run and mounts the cur
 | `help` | Show available commands |
 
 If no command is given, `build` is assumed.
-`./rodin help` is handled locally and does not require Docker, podman, or a prebuilt image.
+`./rodin help` is handled locally and does not require a native install, Docker, podman, or a prebuilt image.
+
+## Runtime Selection
+
+The wrapper resolves the runtime in this order (`RODIN_RUNTIME=auto`, the default):
+
+1. `RODIN_DIR` pointing at a Rodin install (`rodin.ini` present) → native
+2. An `./rodin-install.sh` install under the default prefix → native
+3. docker or podman available → container
+
+Force a specific runtime with `RODIN_RUNTIME=native`, `RODIN_RUNTIME=docker`, or `RODIN_RUNTIME=podman`:
+
+```bash
+RODIN_RUNTIME=docker ./rodin build model.zip   # skip native detection
+RODIN_RUNTIME=native ./rodin check model.zip   # fail if no native install
+```
+
+In native mode the wrapper exports `RODIN_DIR`, uses the current directory as the models directory, and puts the sibling `prob/` directory on `PATH` for `probcli`.
 
 ### Build models
 
@@ -43,8 +81,8 @@ If no matching archives are found, the wrapper exits non-zero instead of succeed
 
 Rodin workspace builds have a hard timeout of 60 minutes by default. Override
 it with `RODIN_BUILD_TIMEOUT`, or set `RODIN_BUILD_TIMEOUT=off` to disable it.
-When using `./rodin`, the wrapper forwards `RODIN_BUILD_TIMEOUT` and
-`RODIN_BUILD_TIMEOUT_KILL_AFTER` into the container.
+`RODIN_BUILD_TIMEOUT` and `RODIN_BUILD_TIMEOUT_KILL_AFTER` work in both
+runtimes; in Docker mode the wrapper forwards them into the container.
 
 ### Validate with ProB
 
@@ -71,11 +109,11 @@ When using `./rodin`, the wrapper forwards `RODIN_BUILD_TIMEOUT` and
 
 ### SELinux / Podman
 
-The `rodin` wrapper auto-detects SELinux and applies the `:Z` volume flag. Docker and podman are both supported.
+In Docker mode the `rodin` wrapper auto-detects SELinux and applies the `:Z` volume flag. Docker and podman are both supported.
 
-### Standalone (without Docker)
+### Direct engine invocation
 
-The script can also run directly on a host with Rodin and Java 21+ installed:
+The core engine can be run directly against any Rodin install, without the wrapper:
 
 ```bash
 ./rodin-headless.sh /path/to/rodin /path/to/models [model1.zip ...]
@@ -91,7 +129,7 @@ export RODIN_DIR=/opt/rodin MODELS_DIR=./models
 ./rodin-headless.sh model1.zip
 ```
 
-When multiple standalone runs share the same Rodin installation, transient plugin installation is serialized so they do not clobber one another.
+The Rodin install must have the ProB plugin (`de.prob.core`) — a stock Rodin download does not; `./rodin-install.sh` sets one up correctly. When multiple runs share the same Rodin installation, transient plugin installation is serialized so they do not clobber one another.
 
 ## What It Does
 
@@ -102,7 +140,9 @@ When multiple standalone runs share the same Rodin installation, transient plugi
 5. Copies all generated/updated files (`.bcm`, `.bcc`, `.bpo`, `.bps`, `.bpr`) back into the original archives
 6. Optionally runs ProB validation or Rodin auto-provers (depending on command)
 
-## Image Details
+## Docker Image Details
+
+The Dockerfile is a thin layer: it installs the system packages (GTK3/X11, Xvfb, JDK, zip, SMT solvers) and runs the same `rodin-install.sh` with `--prefix /opt`.
 
 | Component | Version |
 |-----------|---------|
@@ -112,32 +152,38 @@ When multiple standalone runs share the same Rodin installation, transient plugi
 | ProB Rodin plugin | 3.2.1 (core, disprover, symbolic) |
 | SMT Solvers plugin | 1.5.0 (Z3, CVC5, veriT, CVC3, CVC4) |
 | Atelier B provers | 2.4.1 (PP, ML) |
-| Image size | ~1.1 GB |
+| Image size | ~1.3 GB |
 
 ### Rodin Version Selection
 
-By default, `docker build` auto-detects the highest stable Rodin version published on SourceForge:
+By default the latest stable Rodin version published on SourceForge is auto-detected. The installer flags and their `docker build` equivalents:
 
 ```bash
 # Latest stable (default)
+./rodin-install.sh
 docker build -t rodin-headless .
 
 # Latest release candidate
+./rodin-install.sh --rodin-version latest-rc
 docker build --build-arg RODIN_VERSION=latest-rc -t rodin-headless .
 
 # Specific version
+./rodin-install.sh --rodin-version 3.8
 docker build --build-arg RODIN_VERSION=3.8 -t rodin-headless .
 
 # Fully pinned (skip auto-detection)
+./rodin-install.sh --rodin-version 3.9 \
+    --rodin-tarball rodin-3.9.0.202406100806-9b87fe13d-linux.gtk.x86_64.tar.gz
 docker build \
   --build-arg RODIN_VERSION=3.9 \
   --build-arg RODIN_TARBALL=rodin-3.9.0.202406100806-9b87fe13d-linux.gtk.x86_64.tar.gz \
   -t rodin-headless .
 ```
 
-On Apple Silicon Macs, build the image for `linux/amd64`. Rodin and ProB
-publish Linux x86_64 archives for the container path, so native `linux/arm64`
-images will unpack binaries that cannot run:
+On Apple Silicon Macs, native mode is unavailable (Rodin and ProB publish
+Linux x86_64 artifacts only) — use the Docker path and build the image for
+`linux/amd64`, since native `linux/arm64` images would unpack binaries that
+cannot run:
 
 ```bash
 docker build --platform linux/amd64 -t rodin-headless .

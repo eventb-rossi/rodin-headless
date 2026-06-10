@@ -705,19 +705,33 @@ esac
 EOF
     cat > "$tmpbin/java" <<'EOF'
 #!/usr/bin/env bash
-printf '<%s>\n' "$@" > "$INSTALLER_TEST_JAVA_ARGS"
+printf '<%s>\n' "$@" >> "$INSTALLER_TEST_JAVA_ARGS"
 exit 0
 EOF
     chmod +x "$tmpbin/curl" "$tmpbin/java"
 }
 
+# Builds the fixtures and stubs once per test and exports the stub
+# wiring; tests then use run_installer / install_rodin_fixture.
+setup_installer_fixture() {
+    INSTALLER_TMPBIN="$(new_tmpdir)"
+    INSTALLER_PREFIX="$(new_tmpdir)/install"
+    export INSTALLER_TEST_CURL_LOG="$INSTALLER_TMPBIN/curl.log"
+    export INSTALLER_TEST_JAVA_ARGS="$INSTALLER_TMPBIN/java.args"
+    export INSTALLER_TEST_RODIN_TARBALL="$INSTALLER_TMPBIN/rodin-fixture.tar.gz"
+    export INSTALLER_TEST_PROB_TARBALL="$INSTALLER_TMPBIN/prob-fixture.tar.gz"
+    make_rodin_fixture_tarball "$INSTALLER_TEST_RODIN_TARBALL"
+    make_prob_fixture_tarball "$INSTALLER_TEST_PROB_TARBALL"
+    make_installer_stubs "$INSTALLER_TMPBIN"
+}
+
 run_installer() {
-    local tmpbin="$1"
-    shift
-    INSTALLER_TEST_CURL_LOG="${INSTALLER_TEST_CURL_LOG:-/dev/null}" \
-    INSTALLER_TEST_JAVA_ARGS="${INSTALLER_TEST_JAVA_ARGS:-/dev/null}" \
-    PATH="$tmpbin:$PATH" \
-        "$ROOT_DIR/rodin-install.sh" "$@"
+    PATH="$INSTALLER_TMPBIN:$PATH" "$ROOT_DIR/rodin-install.sh" "$@"
+}
+
+install_rodin_fixture() {
+    run_installer --prefix "$INSTALLER_PREFIX" --only rodin \
+        --rodin-version 3.9 --rodin-tarball rodin-3.9-linux.gtk.x86_64.tar.gz "$@"
 }
 
 test_installer_check_deps_reports_missing_tools() {
@@ -745,111 +759,80 @@ test_installer_check_deps_reports_missing_tools() {
         "check-deps should report missing archive tools"
     assert_contains "$output" "MISSING  Xvfb" \
         "check-deps should require Xvfb when DISPLAY is unset"
-    assert_contains "$output" "MISSING  GTK3" \
-        "check-deps should report missing GTK3 libraries"
     assert_contains "$output" "probcli" \
         "check-deps should report the ProB CLI install status"
 }
 
+test_installer_rejects_tarball_without_version() {
+    assert_fails_with "requires a specific --rodin-version" \
+        "$ROOT_DIR/rodin-install.sh" --rodin-tarball rodin-3.9-linux.gtk.x86_64.tar.gz
+}
+
 test_installer_installs_rodin_phase() {
-    local tmpbin prefix curl_log rodin_tarball prob_tarball ini
-    tmpbin="$(new_tmpdir)"
-    prefix="$(new_tmpdir)/install"
-    curl_log="$tmpbin/curl.log"
-    rodin_tarball="$tmpbin/rodin-fixture.tar.gz"
-    prob_tarball="$tmpbin/prob-fixture.tar.gz"
+    setup_installer_fixture
 
-    make_rodin_fixture_tarball "$rodin_tarball"
-    make_prob_fixture_tarball "$prob_tarball"
-    make_installer_stubs "$tmpbin"
+    install_rodin_fixture > /dev/null
 
-    INSTALLER_TEST_CURL_LOG="$curl_log" \
-    INSTALLER_TEST_RODIN_TARBALL="$rodin_tarball" \
-    INSTALLER_TEST_PROB_TARBALL="$prob_tarball" \
-        run_installer "$tmpbin" --prefix "$prefix" --only rodin \
-            --rodin-version 3.9 --rodin-tarball rodin-3.9-linux.gtk.x86_64.tar.gz \
-            > /dev/null
-
-    if [ ! -x "$prefix/rodin/rodin" ]; then
+    if [ ! -x "$INSTALLER_PREFIX/rodin/rodin" ]; then
         fail "installer should unpack an executable rodin binary"
     fi
-    if [ ! -f "$prefix/rodin/plugins/org.eclipse.equinox.launcher_1.6.400.jar" ]; then
+    if [ ! -f "$INSTALLER_PREFIX/rodin/plugins/org.eclipse.equinox.launcher_1.6.400.jar" ]; then
         fail "installer should preserve the tarball plugin layout"
     fi
-    ini="$(cat "$prefix/rodin/rodin.ini")"
-    assert_eq "-vm" "$(head -1 "$prefix/rodin/rodin.ini")" \
+    assert_eq "-vm" "$(head -1 "$INSTALLER_PREFIX/rodin/rodin.ini")" \
         "installer should prepend a -vm directive to rodin.ini"
-    assert_contains "$ini" "$tmpbin" \
-        "installer should point rodin.ini at the resolved java directory"
-    assert_contains "$(cat "$curl_log")" "Core_Rodin_Platform/3.9/rodin-3.9-linux.gtk.x86_64.tar.gz" \
+    assert_contains "$(cat "$INSTALLER_PREFIX/rodin/rodin.ini")" "$INSTALLER_TMPBIN" \
+        "installer should point rodin.ini at the java directory on PATH"
+    assert_contains "$(cat "$INSTALLER_TEST_CURL_LOG")" \
+        "Core_Rodin_Platform/3.9/rodin-3.9-linux.gtk.x86_64.tar.gz" \
         "installer should download the pinned tarball without version detection"
 }
 
 test_installer_rodin_phase_is_idempotent() {
-    local tmpbin prefix curl_log rodin_tarball prob_tarball output
-    tmpbin="$(new_tmpdir)"
-    prefix="$(new_tmpdir)/install"
-    curl_log="$tmpbin/curl.log"
-    rodin_tarball="$tmpbin/rodin-fixture.tar.gz"
-    prob_tarball="$tmpbin/prob-fixture.tar.gz"
+    setup_installer_fixture
 
-    make_rodin_fixture_tarball "$rodin_tarball"
-    make_prob_fixture_tarball "$prob_tarball"
-    make_installer_stubs "$tmpbin"
-
-    export INSTALLER_TEST_CURL_LOG="$curl_log"
-    export INSTALLER_TEST_RODIN_TARBALL="$rodin_tarball"
-    export INSTALLER_TEST_PROB_TARBALL="$prob_tarball"
-
-    run_installer "$tmpbin" --prefix "$prefix" --only rodin \
-        --rodin-version 3.9 --rodin-tarball rodin-3.9-linux.gtk.x86_64.tar.gz \
-        > /dev/null
-    output="$(run_installer "$tmpbin" --prefix "$prefix" --only rodin \
-        --rodin-version 3.9 --rodin-tarball rodin-3.9-linux.gtk.x86_64.tar.gz)"
+    install_rodin_fixture > /dev/null
+    local output
+    output="$(install_rodin_fixture)"
 
     assert_contains "$output" "already installed" \
         "second install run should skip an existing Rodin install"
-    assert_eq "1" "$(wc -l < "$curl_log")" \
+    assert_eq "1" "$(wc -l < "$INSTALLER_TEST_CURL_LOG")" \
         "second install run should not re-download the tarball"
 
-    run_installer "$tmpbin" --prefix "$prefix" --only rodin --force \
-        --rodin-version 3.9 --rodin-tarball rodin-3.9-linux.gtk.x86_64.tar.gz \
-        > /dev/null
-    assert_eq "2" "$(wc -l < "$curl_log")" \
+    install_rodin_fixture --force > /dev/null
+    assert_eq "2" "$(wc -l < "$INSTALLER_TEST_CURL_LOG")" \
         "--force should re-download and reinstall"
+}
 
-    unset INSTALLER_TEST_CURL_LOG INSTALLER_TEST_RODIN_TARBALL INSTALLER_TEST_PROB_TARBALL
+test_installer_refuses_foreign_target_dir() {
+    setup_installer_fixture
+
+    mkdir -p "$INSTALLER_PREFIX/rodin"
+    : > "$INSTALLER_PREFIX/rodin/precious.txt"
+
+    assert_fails_with "Refusing to overwrite" \
+        env PATH="$INSTALLER_TMPBIN:$PATH" "$ROOT_DIR/rodin-install.sh" \
+            --prefix "$INSTALLER_PREFIX" --only rodin \
+            --rodin-version 3.9 --rodin-tarball rodin-3.9-linux.gtk.x86_64.tar.gz
+    if [ ! -f "$INSTALLER_PREFIX/rodin/precious.txt" ]; then
+        fail "installer must not delete a directory that is not a Rodin install"
+    fi
 }
 
 test_installer_prob_phase_runs_p2_director() {
-    local tmpbin prefix curl_log java_args rodin_tarball prob_tarball args
-    tmpbin="$(new_tmpdir)"
-    prefix="$(new_tmpdir)/install"
-    curl_log="$tmpbin/curl.log"
-    java_args="$tmpbin/java.args"
-    rodin_tarball="$tmpbin/rodin-fixture.tar.gz"
-    prob_tarball="$tmpbin/prob-fixture.tar.gz"
+    setup_installer_fixture
 
-    make_rodin_fixture_tarball "$rodin_tarball"
-    make_prob_fixture_tarball "$prob_tarball"
-    make_installer_stubs "$tmpbin"
-
-    export INSTALLER_TEST_CURL_LOG="$curl_log"
-    export INSTALLER_TEST_RODIN_TARBALL="$rodin_tarball"
-    export INSTALLER_TEST_PROB_TARBALL="$prob_tarball"
-    export INSTALLER_TEST_JAVA_ARGS="$java_args"
-
-    run_installer "$tmpbin" --prefix "$prefix" --only rodin \
-        --rodin-version 3.9 --rodin-tarball rodin-3.9-linux.gtk.x86_64.tar.gz \
-        > /dev/null
-    run_installer "$tmpbin" --prefix "$prefix" --only prob --prob-version 1.15.1 \
+    install_rodin_fixture > /dev/null
+    run_installer --prefix "$INSTALLER_PREFIX" --only prob --prob-version 1.15.1 \
         > /dev/null
 
-    if [ ! -x "$prefix/prob/probcli" ]; then
+    if [ ! -x "$INSTALLER_PREFIX/prob/probcli" ]; then
         fail "prob phase should unpack the ProB CLI"
     fi
 
-    args="$(cat "$java_args")"
+    local args
+    args="$(cat "$INSTALLER_TEST_JAVA_ARGS")"
     assert_contains "$args" "<org.eclipse.equinox.p2.director>" \
         "prob phase should run the p2 director"
     assert_contains "$args" "<-Djdk.xml.maxGeneralEntitySizeLimit=0>" \
@@ -860,9 +843,34 @@ test_installer_prob_phase_runs_p2_director() {
         "prob phase should compute the Eclipse release from .eclipseproduct"
     assert_contains "$args" "org.eventb.smt.feature.group,com.clearsy.atelierb.provers.feature.group,de.prob2.feature.feature.group,de.prob2.disprover.feature.feature.group,de.prob2.symbolic.feature.feature.group" \
         "prob phase should install the ProB, SMT, and Atelier B features"
+    assert_not_contains "$args" "<-uninstallIU>" \
+        "a fresh plugin install should not run an uninstall pass"
+}
 
-    unset INSTALLER_TEST_CURL_LOG INSTALLER_TEST_RODIN_TARBALL \
-        INSTALLER_TEST_PROB_TARBALL INSTALLER_TEST_JAVA_ARGS
+test_installer_plugin_completeness_and_force() {
+    setup_installer_fixture
+
+    install_rodin_fixture > /dev/null
+    local plugins="$INSTALLER_PREFIX/rodin/plugins"
+    mkdir -p "$plugins/de.prob.core_9.0.0"
+    : > "$plugins/org.eventb.smt.core_1.0.0.jar"
+    : > "$plugins/com.clearsy.atelierb.provers.core_1.0.0.jar"
+
+    local output
+    output="$(run_installer --prefix "$INSTALLER_PREFIX" --only prob --prob-version 1.15.1)"
+    assert_contains "$output" "plugins already installed" \
+        "a complete plugin set should skip the director"
+    assert_not_contains "$(cat "$INSTALLER_TEST_JAVA_ARGS")" "p2.director" \
+        "a complete plugin set should not invoke the p2 director"
+
+    run_installer --prefix "$INSTALLER_PREFIX" --only prob --prob-version 1.15.1 \
+        --force > /dev/null
+    local args
+    args="$(cat "$INSTALLER_TEST_JAVA_ARGS")"
+    assert_contains "$args" "<-uninstallIU>" \
+        "--force should uninstall the existing features before reinstalling"
+    assert_contains "$args" "<-installIU>" \
+        "--force should reinstall the features after the uninstall pass"
 }
 
 test_dockerfile_installs_headless_helper() {
@@ -875,8 +883,11 @@ test_dockerfile_installs_headless_helper() {
     assert_contains "$dockerfile" "/usr/local/bin/" \
         "Dockerfile should install the headless scripts in /usr/local/bin"
     assert_contains "$dockerfile" \
-        "COPY --chmod=755 rodin-install.sh rodin-version.sh prob-version.sh rodin-headless-lib.sh" \
-        "Dockerfile should copy the shared installer and its helpers"
+        "COPY --chmod=755 rodin-install.sh rodin-version.sh rodin-headless-lib.sh" \
+        "Dockerfile should copy the installer before the Rodin phase"
+    assert_contains "$dockerfile" \
+        "COPY --chmod=755 prob-version.sh /tmp/install/" \
+        "Dockerfile should copy the ProB version helper in its own layer"
     assert_contains "$dockerfile" '--prefix /opt --only rodin' \
         "Dockerfile should install Rodin via the shared installer"
     assert_contains "$dockerfile" '--rodin-version "$RODIN_VERSION"' \
@@ -914,9 +925,12 @@ main() {
     test_prob_core_dependency_glob_uses_resolved_directory
     test_validate_deadlock_check_uses_eventb_true_ast
     test_installer_check_deps_reports_missing_tools
+    test_installer_rejects_tarball_without_version
     test_installer_installs_rodin_phase
     test_installer_rodin_phase_is_idempotent
+    test_installer_refuses_foreign_target_dir
     test_installer_prob_phase_runs_p2_director
+    test_installer_plugin_completeness_and_force
     test_dockerfile_installs_headless_helper
     printf 'PASS: %s\n' "tests/run.sh"
 }

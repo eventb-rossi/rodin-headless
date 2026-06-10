@@ -31,7 +31,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=rodin-headless-lib.sh
 . "$SCRIPT_DIR/rodin-headless-lib.sh"
 
-PREFIX="${RODIN_PREFIX:-$HOME/.local/share/rodin-headless}"
+PREFIX="$(default_rodin_prefix)"
 ONLY=""
 FORCE=0
 RODIN_VERSION_ARG="latest"
@@ -49,7 +49,8 @@ Options:
   --only rodin|prob  Run a single install phase
   --force            Reinstall even if already present
   --rodin-version V  "latest" (default), "latest-rc", or e.g. "3.9"
-  --rodin-tarball F  Pin the exact tarball filename (skips detection)
+  --rodin-tarball F  Pin the exact tarball filename (skips detection;
+                     requires --rodin-version to be a specific version)
   --prob-version V   "latest" (default) or e.g. "1.15.1"
   --check-deps       Report status of system dependencies and exit
 EOF
@@ -81,8 +82,49 @@ case "$ONLY" in
         ;;
 esac
 
+case "$RODIN_TARBALL_ARG:$RODIN_VERSION_ARG" in
+    ?*:latest|?*:latest-rc)
+        echo "ERROR: --rodin-tarball requires a specific --rodin-version (the version is part of the download URL)" >&2
+        exit 1
+        ;;
+esac
+
 RODIN_INSTALL_DIR="$PREFIX/rodin"
 PROB_INSTALL_DIR="$PREFIX/prob"
+
+# Temp files/dirs are tracked here and removed on exit, so failed
+# downloads or interrupted unpacks do not leak into /tmp or the prefix.
+TMP_PATHS=()
+cleanup_tmp() {
+    if [ "${#TMP_PATHS[@]}" -gt 0 ]; then
+        rm -rf "${TMP_PATHS[@]}"
+    fi
+    return 0
+}
+trap cleanup_tmp EXIT
+
+fetch_and_unpack() {
+    local url="$1" dest="$2" tarball
+
+    tarball="$(mktemp /tmp/rodin-headless-dl.XXXXXX)"
+    TMP_PATHS+=("$tarball")
+    curl -fSL --retry 3 --retry-delay 5 --max-time 300 -o "$tarball" "$url"
+    mkdir -p "$dest"
+    tar xzf "$tarball" -C "$dest" --strip-components=1
+    rm -f "$tarball"
+}
+
+# Refuse to touch a non-empty target directory that doesn't carry the
+# expected marker file — it is probably not ours to delete.
+refuse_foreign_dir() {
+    local dir="$1" marker="$2"
+
+    if [ -e "$dir" ] && [ ! -e "$dir/$marker" ] && [ -n "$(ls -A "$dir" 2>/dev/null)" ]; then
+        echo "ERROR: $dir exists but does not look like a previous install (no $marker)" >&2
+        echo "Refusing to overwrite it — remove it manually and re-run" >&2
+        exit 1
+    fi
+}
 
 # ── Dependency checks ───────────────────────────────────────────────
 
@@ -98,6 +140,21 @@ check_dep() {
         optional) printf 'missing  %s (optional) — %s\n' "$name" "$hint" ;;
     esac
     [ "$kind" != required ]
+}
+
+# Returns 0 if GTK3 is present, 1 if absent, 2 if undeterminable.
+# ldconfig lives in /sbin on some distros, which non-root PATHs may lack.
+gtk3_status() {
+    local lc
+    for lc in ldconfig /sbin/ldconfig /usr/sbin/ldconfig; do
+        if command -v "$lc" >/dev/null 2>&1; then
+            if "$lc" -p 2>/dev/null | grep -q 'libgtk-3\.so\.0'; then
+                return 0
+            fi
+            return 1
+        fi
+    done
+    return 2
 }
 
 check_deps_report() {
@@ -117,15 +174,19 @@ check_deps_report() {
         printf 'ok       Xvfb not needed (DISPLAY=%s is set)\n' "$DISPLAY"
     fi
 
-    if ldconfig -p 2>/dev/null | grep -q 'libgtk-3\.so\.0'; then
-        printf 'ok       GTK3 (libgtk-3.so.0)\n'
-    else
-        printf 'MISSING  GTK3 — SWT needs it even headless (apt: libgtk-3-0, dnf: gtk3)\n'
-        missing=1
-    fi
+    local gtk3_rc=0
+    gtk3_status || gtk3_rc=$?
+    case "$gtk3_rc" in
+        0) printf 'ok       GTK3 (libgtk-3.so.0)\n' ;;
+        1)
+            printf 'MISSING  GTK3 — SWT needs it even headless (apt: libgtk-3-0, dnf: gtk3)\n'
+            missing=1
+            ;;
+        *) printf 'unknown  GTK3 — ldconfig not found, cannot check\n' ;;
+    esac
 
-    check_dep optional z3 "extra SMT solver for probcli (apt/dnf: z3)" || true
-    check_dep optional cvc5 "extra SMT solver for probcli (apt: cvc5)" || true
+    check_dep optional z3 "extra SMT solver for probcli (apt/dnf: z3)"
+    check_dep optional cvc5 "extra SMT solver for probcli (apt: cvc5)"
 
     if [ -x "$PROB_INSTALL_DIR/probcli" ]; then
         printf 'ok       probcli (%s)\n' "$PROB_INSTALL_DIR/probcli"
@@ -138,14 +199,23 @@ check_deps_report() {
 }
 
 require_install_deps() {
-    local tool missing=0
+    local tool missing=0 java_major
     for tool in curl tar java; do
         if ! command -v "$tool" >/dev/null 2>&1; then
             echo "ERROR: $tool is required to run the installer" >&2
             missing=1
         fi
     done
-    [ "$missing" -eq 0 ]
+    [ "$missing" -eq 0 ] || exit 1
+
+    # Rodin/Eclipse and the p2 director need a modern JVM; catch a stale
+    # default java up front instead of mid-install. Skip silently when
+    # the version string is unparsable (exotic JVMs).
+    java_major="$(java -version 2>&1 | sed -n 's/.*version "\([0-9][0-9]*\).*/\1/p' | head -1)"
+    if [ -n "$java_major" ] && [ "$java_major" -lt 17 ]; then
+        echo "ERROR: java $java_major is too old — Rodin needs a JDK 17+ (21+ recommended)" >&2
+        exit 1
+    fi
 }
 
 require_supported_platform() {
@@ -154,27 +224,31 @@ require_supported_platform() {
     arch="$(uname -m)"
     if [ "$os" != "Linux" ] || [ "$arch" != "x86_64" ]; then
         echo "ERROR: Native install supports Linux x86_64 only (got $os $arch)." >&2
-        echo "Rodin and ProB publish Linux x86_64 artifacts; use Docker mode instead: ./rodin build ..." >&2
+        echo "Rodin and ProB publish Linux x86_64 artifacts; use an amd64 container instead (the ./rodin wrapper sets --platform linux/amd64 on arm64 hosts)." >&2
         exit 1
     fi
 }
 
 if [ "$CHECK_DEPS" -eq 1 ]; then
-    check_deps_report
-    exit $?
+    if check_deps_report; then
+        exit 0
+    fi
+    exit 1
 fi
 
 # ── Phase: rodin ────────────────────────────────────────────────────
-# Download the Rodin tarball, unpack it, and point rodin.ini at the JVM.
+# Download the Rodin tarball, unpack it into a staging directory, and
+# only then replace the previous install — a failed download or unpack
+# never destroys a working setup.
 
 install_rodin() {
     if [ -e "$RODIN_INSTALL_DIR/rodin.ini" ] && [ "$FORCE" -eq 0 ]; then
         echo "Rodin already installed at $RODIN_INSTALL_DIR (use --force to reinstall)"
         return 0
     fi
-    rm -rf "$RODIN_INSTALL_DIR"
+    refuse_foreign_dir "$RODIN_INSTALL_DIR" rodin.ini
 
-    local rodin_env tarball_tmp java_bin_dir
+    local rodin_env staging java_bin_dir
     if [ -n "$RODIN_TARBALL_ARG" ]; then
         RODIN_VERSION="$RODIN_VERSION_ARG"
         RODIN_TARBALL="$RODIN_TARBALL_ARG"
@@ -185,20 +259,23 @@ install_rodin() {
     fi
 
     echo "Installing Rodin $RODIN_VERSION: $RODIN_TARBALL"
-    tarball_tmp="$(mktemp /tmp/rodin-tarball.XXXXXX)"
-    curl -fSL --retry 3 --retry-delay 5 --max-time 300 \
-        -o "$tarball_tmp" "$RODIN_URL"
-    mkdir -p "$RODIN_INSTALL_DIR"
-    tar xzf "$tarball_tmp" -C "$RODIN_INSTALL_DIR" --strip-components=1
-    rm -f "$tarball_tmp"
-    chmod +x "$RODIN_INSTALL_DIR/rodin"
+    mkdir -p "$PREFIX"
+    staging="$(mktemp -d "$PREFIX/.rodin-staging.XXXXXX")"
+    TMP_PATHS+=("$staging")
+    fetch_and_unpack "$RODIN_URL" "$staging"
+    chmod +x "$staging/rodin"
 
-    # Point Rodin at the JVM that will run it; resolve symlinks so the
-    # path survives alternatives-style indirection.
-    java_bin_dir="$(dirname "$(readlink -f "$(command -v java)")")"
-    if [ "$(head -1 "$RODIN_INSTALL_DIR/rodin.ini")" != "-vm" ]; then
-        sed -i "1i -vm\n$java_bin_dir" "$RODIN_INSTALL_DIR/rodin.ini"
+    # Point Rodin at the JVM that will run it. Use the PATH entry's
+    # directory without resolving symlinks — alternatives-style links
+    # stay valid across JDK package upgrades, a resolved versioned
+    # directory does not.
+    java_bin_dir="$(dirname "$(command -v java)")"
+    if [ "$(head -1 "$staging/rodin.ini")" != "-vm" ]; then
+        sed -i "1i -vm\n$java_bin_dir" "$staging/rodin.ini"
     fi
+
+    rm -rf "$RODIN_INSTALL_DIR"
+    mv "$staging" "$RODIN_INSTALL_DIR"
 
     echo "Rodin $RODIN_VERSION installed at $RODIN_INSTALL_DIR"
 }
@@ -207,30 +284,59 @@ install_rodin() {
 # Download the ProB CLI and install the ProB/SMT/Atelier B Rodin plugins
 # via the p2 director.
 
+FEATURE_IUS="org.eventb.smt.feature.group,com.clearsy.atelierb.provers.feature.group,de.prob2.feature.feature.group,de.prob2.disprover.feature.feature.group,de.prob2.symbolic.feature.feature.group"
+
+# One marker plugin per installed feature family; all present means the
+# director run completed, so an interrupted install is retried.
+plugins_complete() {
+    [ -n "$(resolve_latest_dir "$RODIN_INSTALL_DIR/plugins" de.prob.core)" ] \
+        && [ -n "$(resolve_latest_jar "$RODIN_INSTALL_DIR/plugins" org.eventb.smt.core)" ] \
+        && [ -n "$(resolve_latest_jar "$RODIN_INSTALL_DIR/plugins" com.clearsy.atelierb.provers.core)" ]
+}
+
+run_p2_director() {
+    local launcher_jar="$1"
+    shift
+    # JDK 23+ ships restrictive JAXP defaults that choke on the large
+    # entities in Eclipse update-site metadata; lift the limits for the
+    # director run (0 = unlimited).
+    java -Djdk.xml.maxGeneralEntitySizeLimit=0 \
+        -Djdk.xml.totalEntitySizeLimit=0 \
+        -jar "$launcher_jar" \
+        -nosplash \
+        -application org.eclipse.equinox.p2.director \
+        -destination "$RODIN_INSTALL_DIR" \
+        "$@"
+}
+
 install_prob() {
     if [ ! -e "$RODIN_INSTALL_DIR/rodin.ini" ]; then
         echo "ERROR: Rodin not found at $RODIN_INSTALL_DIR — run the rodin phase first" >&2
         exit 1
     fi
 
-    local prob_env prob_tmp
+    local prob_env staging
     if [ -x "$PROB_INSTALL_DIR/probcli" ] && [ "$FORCE" -eq 0 ]; then
         echo "ProB CLI already installed at $PROB_INSTALL_DIR (use --force to reinstall)"
     else
-        rm -rf "$PROB_INSTALL_DIR"
+        refuse_foreign_dir "$PROB_INSTALL_DIR" probcli
         prob_env="$("$SCRIPT_DIR/prob-version.sh" "$PROB_VERSION_ARG")"
         eval "$prob_env"
         echo "Installing ProB $PROB_VERSION"
-        prob_tmp="$(mktemp /tmp/prob-tarball.XXXXXX)"
-        curl -fSL --retry 3 --retry-delay 5 --max-time 300 \
-            -o "$prob_tmp" "$PROB_URL"
-        mkdir -p "$PROB_INSTALL_DIR"
-        tar xzf "$prob_tmp" -C "$PROB_INSTALL_DIR" --strip-components=1
-        rm -f "$prob_tmp"
+        mkdir -p "$PREFIX"
+        staging="$(mktemp -d "$PREFIX/.prob-staging.XXXXXX")"
+        TMP_PATHS+=("$staging")
+        fetch_and_unpack "$PROB_URL" "$staging"
+        rm -rf "$PROB_INSTALL_DIR"
+        mv "$staging" "$PROB_INSTALL_DIR"
         echo "ProB CLI installed at $PROB_INSTALL_DIR"
     fi
 
-    if [ -n "$(resolve_latest_dir "$RODIN_INSTALL_DIR/plugins" de.prob.core)" ] && [ "$FORCE" -eq 0 ]; then
+    local plugins_present=0
+    if [ -n "$(resolve_latest_dir "$RODIN_INSTALL_DIR/plugins" de.prob.core)" ]; then
+        plugins_present=1
+    fi
+    if [ "$plugins_present" -eq 1 ] && [ "$FORCE" -eq 0 ] && plugins_complete; then
         echo "ProB Rodin plugins already installed in $RODIN_INSTALL_DIR (use --force to reinstall)"
         return 0
     fi
@@ -253,17 +359,15 @@ install_prob() {
         exit 1
     fi
 
-    # JDK 23+ ships restrictive JAXP defaults that choke on the large
-    # entities in Eclipse update-site metadata; lift the limits for the
-    # director run (0 = unlimited).
-    java -Djdk.xml.maxGeneralEntitySizeLimit=0 \
-        -Djdk.xml.totalEntitySizeLimit=0 \
-        -jar "$launcher_jar" \
-        -nosplash \
-        -application org.eclipse.equinox.p2.director \
+    # The director cannot install IUs over themselves; on --force (or a
+    # partial previous run) remove what is there first, best-effort.
+    if [ "$plugins_present" -eq 1 ]; then
+        run_p2_director "$launcher_jar" -uninstallIU "$FEATURE_IUS" || true
+    fi
+
+    run_p2_director "$launcher_jar" \
         -repository "https://rodin-b-sharp.sourceforge.net/updates/,https://www.atelierb.eu/update_site/atelierb_provers,https://stups.hhu-hosting.de/rodin/prob1/release/,https://download.eclipse.org/releases/$eclipse_release/" \
-        -installIU org.eventb.smt.feature.group,com.clearsy.atelierb.provers.feature.group,de.prob2.feature.feature.group,de.prob2.disprover.feature.feature.group,de.prob2.symbolic.feature.feature.group \
-        -destination "$RODIN_INSTALL_DIR"
+        -installIU "$FEATURE_IUS"
 
     echo "ProB Rodin plugins installed in $RODIN_INSTALL_DIR"
 }

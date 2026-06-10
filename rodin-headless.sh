@@ -45,6 +45,28 @@ if [ -z "${DISPLAY:-}" ] && command -v Xvfb >/dev/null 2>&1; then
     sleep 1
 fi
 
+# Registered before any validation exit so an early failure still kills
+# the Xvfb we just started; workspace/lock state is guarded because it
+# is only created further down.
+WORKSPACE=""
+PLUGIN_DIR=""
+cleanup() {
+    if [ -n "$WORKSPACE" ] || [ -n "$PLUGIN_DIR" ]; then
+        rm -rf ${WORKSPACE:+"$WORKSPACE"} ${PLUGIN_DIR:+"$PLUGIN_DIR"}
+    fi
+    if [ -n "${LOCK_FD:-}" ]; then
+        rm -f "$RODIN_PLUGINS/$BUNDLE_JAR_NAME"
+        if [ -f "$BUNDLES_INFO" ]; then
+            remove_exact_line "$BUNDLES_INFO" "$BUNDLE_INFO_LINE"
+        fi
+        flock -u "$LOCK_FD" || true
+        exec {LOCK_FD}>&-
+        unset LOCK_FD
+    fi
+    [ -n "${XVFB_PID:-}" ] && kill "$XVFB_PID" 2>/dev/null || true
+}
+trap cleanup EXIT
+
 # Resolve RODIN_DIR and MODELS_DIR from positional args or environment variables
 if [ $# -ge 2 ] && [ -d "${1:-}" ] && [ -d "${2:-}" ]; then
     RODIN_DIR="$1"
@@ -99,7 +121,7 @@ RODIN_PLUGINS="$RODIN_DIR/plugins"
 # The builder plugin compiles against de.prob.core in every mode; fail
 # early with a hint instead of dying later in the classpath setup when
 # pointed at a bare Rodin install.
-if [ -z "$(resolve_latest_dir "$RODIN_PLUGINS" de.prob.core)" ]; then
+if [ ! -d "$RODIN_PLUGINS" ] || [ -z "$(resolve_latest_dir "$RODIN_PLUGINS" de.prob.core)" ]; then
     echo "ERROR: ProB Rodin plugin not installed in $RODIN_DIR" >&2
     echo "Run ./rodin-install.sh to install it" >&2
     exit 1
@@ -118,21 +140,6 @@ APPLICATION_ID="$BUNDLE_SYMBOLIC_NAME.headlessBuilder"
 RODIN_BUILD_TIMEOUT="${RODIN_BUILD_TIMEOUT:-60m}"
 RODIN_BUILD_TIMEOUT_KILL_AFTER="${RODIN_BUILD_TIMEOUT_KILL_AFTER:-30s}"
 declare -A ZIP_TO_PROJECT  # maps zip basename → workspace project name
-
-cleanup() {
-    rm -rf "$WORKSPACE" "$PLUGIN_DIR"
-    if [ -n "${LOCK_FD:-}" ]; then
-        rm -f "$RODIN_PLUGINS/$BUNDLE_JAR_NAME"
-        if [ -f "$BUNDLES_INFO" ]; then
-            remove_exact_line "$BUNDLES_INFO" "$BUNDLE_INFO_LINE"
-        fi
-        flock -u "$LOCK_FD" || true
-        exec {LOCK_FD}>&-
-        unset LOCK_FD
-    fi
-    [ -n "${XVFB_PID:-}" ] && kill "$XVFB_PID" 2>/dev/null || true
-}
-trap cleanup EXIT
 
 echo "Workspace: $WORKSPACE"
 echo "Processing ${#ZIPS[@]} archives"
@@ -486,10 +493,15 @@ if [ -f "$BUNDLES_INFO" ]; then
     echo "$BUNDLE_INFO_LINE" >> "$BUNDLES_INFO"
 fi
 
-# Build the Rodin launch command (prefer equinox launcher JAR over native binary)
+# Build the Rodin launch command (prefer equinox launcher JAR over native binary).
+# The jdk.xml properties lift JDK 23+ JAXP limits that break Eclipse's
+# XML parsing (same workaround as the p2 director in rodin-install.sh).
 LAUNCHER_JAR=$(resolve_latest_jar "$RODIN_PLUGINS" org.eclipse.equinox.launcher)
 if [ -n "$LAUNCHER_JAR" ]; then
-    RODIN_CMD=(java "-Drodinbuilder.mode=$BUILD_MODE" -jar "$LAUNCHER_JAR" -install "$RODIN_DIR")
+    RODIN_CMD=(java "-Drodinbuilder.mode=$BUILD_MODE"
+        -Djdk.xml.maxGeneralEntitySizeLimit=0
+        -Djdk.xml.totalEntitySizeLimit=0
+        -jar "$LAUNCHER_JAR" -install "$RODIN_DIR")
 else
     RODIN_CMD=("$RODIN_DIR/rodin")
 fi

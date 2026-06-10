@@ -47,12 +47,16 @@ ARG RODIN_VERSION=latest
 ARG RODIN_TARBALL=
 ARG PROB_VERSION=latest
 
-COPY --chmod=755 rodin-install.sh rodin-version.sh prob-version.sh rodin-headless-lib.sh \
+# Two COPYs so a prob-version.sh edit does not invalidate the cached
+# Rodin download layer.
+COPY --chmod=755 rodin-install.sh rodin-version.sh rodin-headless-lib.sh \
     /tmp/install/
 
 RUN /tmp/install/rodin-install.sh --prefix /opt --only rodin \
         --rodin-version "$RODIN_VERSION" \
         ${RODIN_TARBALL:+--rodin-tarball "$RODIN_TARBALL"}
+
+COPY --chmod=755 prob-version.sh /tmp/install/
 
 RUN /tmp/install/rodin-install.sh --prefix /opt --only prob \
         --prob-version "$PROB_VERSION" \

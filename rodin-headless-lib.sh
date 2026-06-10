@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 
+# Single definition of the native install location, shared by the
+# installer (write side) and the rodin wrapper (detect side).
+default_rodin_prefix() {
+    printf '%s\n' "${RODIN_PREFIX:-${HOME:-}/.local/share/rodin-headless}"
+}
+
 find_archive_project_root() {
     local archive_root="$1"
 

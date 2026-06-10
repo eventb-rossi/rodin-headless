@@ -17,6 +17,8 @@ set -euo pipefail
 
 IMAGE="rodin-headless"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=rodin-headless-lib.sh
+. "$SCRIPT_DIR/rodin-headless-lib.sh"
 PLATFORM_ARGS=()
 
 case "${1:-}" in
@@ -26,12 +28,20 @@ case "${1:-}" in
 esac
 
 find_native_rodin() {
-    if [ -n "${RODIN_DIR:-}" ] && [ -f "$RODIN_DIR/rodin.ini" ]; then
-        printf '%s\n' "$RODIN_DIR"
-        return 0
+    if [ -n "${RODIN_DIR:-}" ]; then
+        if [ -f "$RODIN_DIR/rodin.ini" ]; then
+            printf '%s\n' "$RODIN_DIR"
+            return 0
+        fi
+        echo "Warning: RODIN_DIR=$RODIN_DIR has no rodin.ini; ignoring it" >&2
     fi
-    local default_dir="${RODIN_PREFIX:-$HOME/.local/share/rodin-headless}/rodin"
-    if [ -f "$default_dir/rodin.ini" ]; then
+    # Only auto-select a default-prefix install that is complete (the
+    # engine needs de.prob.core even for plain builds) — a half-finished
+    # install must not shadow a working container fallback.
+    local default_dir
+    default_dir="$(default_rodin_prefix)/rodin"
+    if [ -f "$default_dir/rodin.ini" ] \
+        && compgen -G "$default_dir/plugins/de.prob.core_*" >/dev/null; then
         printf '%s\n' "$default_dir"
         return 0
     fi
@@ -90,11 +100,14 @@ else
 fi
 
 # Rodin and ProB only publish Linux x86_64 artifacts for the container path.
-# On Apple Silicon, build an amd64 image so those binaries can run under
-# Docker/Podman emulation instead of being unpacked into an arm64 image.
-if [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then
-    PLATFORM_ARGS=(--platform linux/amd64)
-fi
+# On arm64 hosts (Apple Silicon, Linux aarch64), build an amd64 image so
+# those binaries can run under emulation instead of being unpacked into an
+# arm64 image that cannot execute them.
+case "$(uname -m)" in
+    arm64|aarch64)
+        PLATFORM_ARGS=(--platform linux/amd64)
+        ;;
+esac
 
 image_needs_build() {
     local image_arch

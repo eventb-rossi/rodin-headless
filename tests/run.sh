@@ -372,6 +372,19 @@ test_rodin_headless_rejects_missing_archives() {
         "$ROOT_DIR/rodin-headless.sh" missing.zip
 }
 
+test_rodin_headless_requires_prob_plugin() {
+    local tmpdir rodin_dir models_dir
+    tmpdir="$(new_tmpdir)"
+    rodin_dir="$tmpdir/rodin"
+    models_dir="$tmpdir/models"
+    mkdir -p "$rodin_dir/plugins" "$models_dir"
+    : > "$models_dir/model.zip"
+
+    assert_fails_with "ERROR: ProB Rodin plugin not installed in $rodin_dir" \
+        env DISPLAY=:0 RODIN_DIR="$rodin_dir" MODELS_DIR="$models_dir" \
+        "$ROOT_DIR/rodin-headless.sh" model.zip
+}
+
 test_find_archive_project_root_supports_context_only_models() {
     local tmpdir actual
     tmpdir="$(new_tmpdir)"
@@ -874,6 +887,7 @@ main() {
     test_rodin_wrapper_prefers_native_install
     test_rodin_runtime_docker_overrides_native
     test_rodin_headless_rejects_missing_archives
+    test_rodin_headless_requires_prob_plugin
     test_find_archive_project_root_supports_context_only_models
     test_find_archive_project_root_falls_back_to_project_metadata
     test_run_with_filtered_output_preserves_failure_status

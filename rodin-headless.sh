@@ -94,9 +94,19 @@ if [ ${#ZIPS[@]} -eq 0 ]; then
     exit 1
 fi
 
+RODIN_PLUGINS="$RODIN_DIR/plugins"
+
+# The builder plugin compiles against de.prob.core in every mode; fail
+# early with a hint instead of dying later in the classpath setup when
+# pointed at a bare Rodin install.
+if [ -z "$(resolve_latest_dir "$RODIN_PLUGINS" de.prob.core)" ]; then
+    echo "ERROR: ProB Rodin plugin not installed in $RODIN_DIR" >&2
+    echo "Run ./rodin-install.sh to install it" >&2
+    exit 1
+fi
+
 WORKSPACE=$(mktemp -d)
 PLUGIN_DIR=$(mktemp -d)
-RODIN_PLUGINS="$RODIN_DIR/plugins"
 BUNDLES_INFO="$RODIN_DIR/configuration/org.eclipse.equinox.simpleconfigurator/bundles.info"
 LOCK_FILE="$RODIN_DIR/.rodinbuilder.lock"
 RUN_ID="$(basename "$PLUGIN_DIR" | tr -cd '[:alnum:]')"

@@ -50,18 +50,16 @@ fi
 # is only created further down.
 WORKSPACE=""
 PLUGIN_DIR=""
-LOCK_HELD=""
 cleanup() {
     # rm -f treats empty operands as already-removed, so the not-yet-set
     # case needs no guard.
     rm -rf "$WORKSPACE" "$PLUGIN_DIR"
-    if [ -n "$LOCK_HELD" ]; then
+    if [ -n "$RODIN_LOCK_KIND" ]; then
         rm -f "$RODIN_PLUGINS/$BUNDLE_JAR_NAME"
         if [ -f "$BUNDLES_INFO" ]; then
             remove_exact_line "$BUNDLES_INFO" "$BUNDLE_INFO_LINE"
         fi
         release_rodin_lock
-        LOCK_HELD=""
     fi
     [ -n "${XVFB_PID:-}" ] && kill "$XVFB_PID" 2>/dev/null || true
 }
@@ -82,6 +80,10 @@ if [ -z "$RODIN_DIR" ] || [ -z "$MODELS_DIR" ]; then
     echo "  Or set RODIN_DIR and MODELS_DIR environment variables." >&2
     exit 1
 fi
+
+# The directory with the Eclipse layout: RODIN_DIR itself on Linux,
+# Contents/Eclipse inside the macOS app bundle.
+RODIN_HOME="$(resolve_rodin_home_or_root "$RODIN_DIR")"
 
 # Determine which archives to process
 if [ $# -gt 0 ]; then
@@ -118,7 +120,7 @@ if [ ${#ZIPS[@]} -eq 0 ]; then
     exit 1
 fi
 
-RODIN_PLUGINS="$RODIN_DIR/plugins"
+RODIN_PLUGINS="$RODIN_HOME/plugins"
 
 # The builder plugin compiles against de.prob.core in every mode; fail
 # early with a hint instead of dying later in the classpath setup when
@@ -133,8 +135,8 @@ fi
 
 WORKSPACE=$(mktemp -d)
 PLUGIN_DIR=$(mktemp -d)
-BUNDLES_INFO="$RODIN_DIR/configuration/org.eclipse.equinox.simpleconfigurator/bundles.info"
-LOCK_FILE="$RODIN_DIR/.rodinbuilder.lock"
+BUNDLES_INFO="$RODIN_HOME/configuration/org.eclipse.equinox.simpleconfigurator/bundles.info"
+LOCK_FILE="$RODIN_HOME/.rodinbuilder.lock"
 RUN_ID="$(basename "$PLUGIN_DIR" | tr -cd '[:alnum:]')"
 BUNDLE_VERSION="1.0.0"
 BUNDLE_SYMBOLIC_NAME="rodinbuilder.$RUN_ID"
@@ -153,8 +155,8 @@ echo
 
 # --- Step 1: Extract archives into workspace ---
 echo "=== Step 1: Extracting archives ==="
-zip_index=0
-for zip in "${ZIPS[@]}"; do
+for zip_index in "${!ZIPS[@]}"; do
+    zip="${ZIPS[$zip_index]}"
     m="${zip%.zip}"
 
     tmpdir=$(mktemp -d)
@@ -213,7 +215,6 @@ for zip in "${ZIPS[@]}"; do
 EOF
     fi
     ZIP_PROJECTS[$zip_index]="$projname"
-    zip_index=$((zip_index + 1))
     echo "  $m → $projname"
 done
 echo
@@ -494,19 +495,26 @@ echo "=== Step 3: Running Rodin headless builder ==="
 # Install plugin to plugins/ directory and register in bundles.info.
 # Hold the lock until cleanup so concurrent standalone runs cannot clobber the bundle.
 acquire_rodin_lock "$LOCK_FILE"
-LOCK_HELD=1
 cp "$PLUGIN_DIR/$BUNDLE_JAR_NAME" "$RODIN_PLUGINS/$BUNDLE_JAR_NAME"
 if [ -f "$BUNDLES_INFO" ]; then
     echo "$BUNDLE_INFO_LINE" >> "$BUNDLES_INFO"
+fi
+
+# SWT's Cocoa port must run on the JVM's first thread; Linux JVMs
+# reject the flag, so it is spliced in on Darwin only.
+JAVA_PLATFORM_OPTS=()
+if [ "$(host_os)" = Darwin ]; then
+    JAVA_PLATFORM_OPTS=(-XstartOnFirstThread)
 fi
 
 # Build the Rodin launch command (prefer equinox launcher JAR over native binary)
 LAUNCHER_JAR=$(resolve_latest_jar "$RODIN_PLUGINS" org.eclipse.equinox.launcher)
 if [ -n "$LAUNCHER_JAR" ]; then
     RODIN_CMD=(java "-Drodinbuilder.mode=$BUILD_MODE" "${JDK_XML_RELAXED_OPTS[@]}"
-        -jar "$LAUNCHER_JAR" -install "$RODIN_DIR")
+        ${JAVA_PLATFORM_OPTS[@]+"${JAVA_PLATFORM_OPTS[@]}"}
+        -jar "$LAUNCHER_JAR" -install "$RODIN_HOME")
 else
-    RODIN_CMD=("$RODIN_DIR/rodin")
+    RODIN_CMD=("$(resolve_rodin_launcher "$RODIN_DIR" || printf '%s\n' "$RODIN_DIR/rodin")")
 fi
 
 echo "Rodin build timeout: $RODIN_BUILD_TIMEOUT"
@@ -526,16 +534,24 @@ case "$LAUNCH_STATUS" in
         echo "ERROR: Rodin headless builder timed out after $RODIN_BUILD_TIMEOUT; skipping archive repackaging." >&2
         exit "$LAUNCH_STATUS"
         ;;
+    125)
+        # The timeout tool itself failed (e.g. unparsable duration) —
+        # no build ran, so repackaging would silently report success.
+        echo "ERROR: could not enforce RODIN_BUILD_TIMEOUT=$RODIN_BUILD_TIMEOUT; skipping archive repackaging." >&2
+        exit "$LAUNCH_STATUS"
+        ;;
+    130)
+        echo "ERROR: Rodin headless builder was interrupted; skipping archive repackaging." >&2
+        exit "$LAUNCH_STATUS"
+        ;;
 esac
 
 # --- Step 4: Check results and repackage ---
 echo "=== Step 4: Repackaging archives ==="
 
-zip_index=0
-for zip in "${ZIPS[@]}"; do
+for zip_index in "${!ZIPS[@]}"; do
+    zip="${ZIPS[$zip_index]}"
     m="${zip%.zip}"
-    this_zip_index=$zip_index
-    zip_index=$((zip_index + 1))
 
     # Extract original zip
     tmpdir=$(mktemp -d)
@@ -549,8 +565,8 @@ for zip in "${ZIPS[@]}"; do
     fi
 
     projdir=""
-    if [ -n "${ZIP_PROJECTS[$this_zip_index]:-}" ]; then
-        candidate="$WORKSPACE/${ZIP_PROJECTS[$this_zip_index]}"
+    if [ -n "${ZIP_PROJECTS[$zip_index]:-}" ]; then
+        candidate="$WORKSPACE/${ZIP_PROJECTS[$zip_index]}"
         if [ -d "$candidate" ]; then
             projdir="$candidate"
         fi

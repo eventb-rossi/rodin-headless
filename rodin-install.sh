@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Install Rodin and ProB for headless Event-B builds.
 #
-# Works natively on Linux x86_64 and inside the Docker image build —
-# the Dockerfile calls this same script, so install logic lives in one place.
+# Works natively on Linux x86_64 and macOS (Intel and Apple Silicon —
+# the latter needs Rodin 3.10+, the first release with arm64 mac
+# builds) and inside the Docker image build — the Dockerfile calls
+# this same script, so install logic lives in one place.
 # Run with --help for the option list.
 #
 # Examples:
@@ -93,14 +95,30 @@ cleanup_tmp() {
 trap cleanup_tmp EXIT
 
 fetch_and_unpack() {
-    local url="$1" dest="$2" tarball
+    local url="$1" dest="$2" archive
 
-    tarball="$(mktemp /tmp/rodin-headless-dl.XXXXXX)"
-    TMP_PATHS+=("$tarball")
-    curl -fSL --retry 3 --retry-delay 5 --max-time 300 -o "$tarball" "$url"
+    archive="$(mktemp /tmp/rodin-headless-dl.XXXXXX)"
+    TMP_PATHS+=("$archive")
+    # Stall-based timeout instead of a tight --max-time cap: the
+    # tarballs are >100 MB and a slow mirror must not abort a transfer
+    # that is still making progress. The generous --max-time still
+    # bounds a pathological trickle (above the stall floor but going
+    # nowhere) so unattended builds fail instead of hanging for hours.
+    curl -fSL --retry 3 --retry-delay 5 --connect-timeout 30 \
+        --speed-limit 1024 --speed-time 60 --max-time 3600 \
+        -o "$archive" "$url"
     mkdir -p "$dest"
-    tar xzf "$tarball" -C "$dest" --strip-components=1
-    rm -f "$tarball"
+    case "$url" in
+        *.zip)
+            # The ProB macOS archive is flat (probcli at the root), so
+            # there is no wrapping directory to strip.
+            unzip -q "$archive" -d "$dest"
+            ;;
+        *)
+            tar xzf "$archive" -C "$dest" --strip-components=1
+            ;;
+    esac
+    rm -f "$archive"
 }
 
 # Refuse to touch a non-empty target directory that doesn't carry the
@@ -147,32 +165,44 @@ gtk3_status() {
 }
 
 check_deps_report() {
-    local missing=0
+    local missing=0 os
+    os="$(host_os)"
 
     echo "Runtime dependencies for headless Rodin builds:"
-    check_dep required javac "JDK 21+ compiles the headless builder plugin (apt: openjdk-21-jdk-headless, dnf: java-21-openjdk-devel)" || missing=1
+    check_dep required javac "JDK 21+ compiles the headless builder plugin (apt: openjdk-21-jdk-headless, dnf: java-21-openjdk-devel, brew: temurin@21)" || missing=1
     check_dep required jar "part of the JDK (see javac)" || missing=1
     check_dep required zip "repackages model archives (apt/dnf: zip)" || missing=1
     check_dep required unzip "extracts model archives (apt/dnf: unzip)" || missing=1
-    check_dep required flock "serializes Rodin launches (part of util-linux)" || missing=1
-    check_dep required timeout "enforces the build timeout (part of coreutils)" || missing=1
 
-    if [ -z "${DISPLAY:-}" ]; then
-        check_dep required Xvfb "virtual display for SWT; needed when DISPLAY is unset (apt: xvfb, dnf: xorg-x11-server-Xvfb)" || missing=1
+    if [ "$os" = Darwin ]; then
+        # SWT uses Cocoa on macOS, locking uses the built-in spinlock,
+        # and the timeout helper has a pure-shell fallback.
+        check_dep optional timeout "enforces the build timeout; built-in fallback (brew: coreutils, as gtimeout)"
+        printf 'ok       Xvfb not needed on macOS (SWT uses Cocoa)\n'
+        printf 'ok       GTK3 not needed on macOS (SWT uses Cocoa)\n'
     else
-        printf 'ok       Xvfb not needed (DISPLAY=%s is set)\n' "$DISPLAY"
-    fi
+        # The lib has pure-shell fallbacks for both, so neither blocks
+        # an install — flock and GNU timeout are just the better tools.
+        check_dep optional flock "serializes Rodin launches; built-in spinlock fallback (part of util-linux)"
+        check_dep optional timeout "enforces the build timeout; built-in fallback (part of coreutils)"
 
-    local gtk3_rc=0
-    gtk3_status || gtk3_rc=$?
-    case "$gtk3_rc" in
-        0) printf 'ok       GTK3 (libgtk-3.so.0)\n' ;;
-        1)
-            printf 'MISSING  GTK3 — SWT needs it even headless (apt: libgtk-3-0, dnf: gtk3)\n'
-            missing=1
-            ;;
-        *) printf 'unknown  GTK3 — ldconfig not found, cannot check\n' ;;
-    esac
+        if [ -z "${DISPLAY:-}" ]; then
+            check_dep required Xvfb "virtual display for SWT; needed when DISPLAY is unset (apt: xvfb, dnf: xorg-x11-server-Xvfb)" || missing=1
+        else
+            printf 'ok       Xvfb not needed (DISPLAY=%s is set)\n' "$DISPLAY"
+        fi
+
+        local gtk3_rc=0
+        gtk3_status || gtk3_rc=$?
+        case "$gtk3_rc" in
+            0) printf 'ok       GTK3 (libgtk-3.so.0)\n' ;;
+            1)
+                printf 'MISSING  GTK3 — SWT needs it even headless (apt: libgtk-3-0, dnf: gtk3)\n'
+                missing=1
+                ;;
+            *) printf 'unknown  GTK3 — ldconfig not found, cannot check\n' ;;
+        esac
+    fi
 
     check_dep optional z3 "extra SMT solver for probcli (apt/dnf: z3)"
     check_dep optional cvc5 "extra SMT solver for probcli (apt: cvc5)"
@@ -189,7 +219,9 @@ check_deps_report() {
 
 require_install_deps() {
     local tool missing=0 java_major
-    for tool in curl tar java; do
+    # unzip unpacks the macOS ProB archive at install time and model
+    # archives at runtime, so it is required everywhere.
+    for tool in curl tar java unzip; do
         if ! command -v "$tool" >/dev/null 2>&1; then
             echo "ERROR: $tool is required to run the installer" >&2
             missing=1
@@ -208,12 +240,10 @@ require_install_deps() {
 }
 
 require_supported_platform() {
-    local os arch
-    os="$(uname -s)"
-    arch="$(uname -m)"
-    if [ "$os" != "Linux" ] || [ "$arch" != "x86_64" ]; then
-        echo "ERROR: Native install supports Linux x86_64 only (got $os $arch)." >&2
-        echo "Rodin and ProB publish Linux x86_64 artifacts; use an amd64 container instead (the ./rodin wrapper sets --platform linux/amd64 on arm64 hosts)." >&2
+    # rodin_platform owns the supported-platform matrix and rejects
+    # unsupported hosts and bad RODIN_PLATFORM overrides alike.
+    if ! rodin_platform >/dev/null; then
+        echo "Use an amd64 container instead (the ./rodin wrapper sets --platform linux/amd64 on arm64 hosts)." >&2
         exit 1
     fi
 }
@@ -231,13 +261,18 @@ fi
 # never destroys a working setup.
 
 install_rodin() {
-    if [ -e "$RODIN_INSTALL_DIR/rodin.ini" ] && [ "$FORCE" -eq 0 ]; then
+    if resolve_rodin_home "$RODIN_INSTALL_DIR" >/dev/null && [ "$FORCE" -eq 0 ]; then
         echo "Rodin already installed at $RODIN_INSTALL_DIR (use --force to reinstall)"
         return 0
     fi
-    refuse_foreign_dir "$RODIN_INSTALL_DIR" rodin.ini
+    # resolve_rodin_home is the layout authority: any install it
+    # recognizes is ours to replace (--force lands here too); anything
+    # else non-empty is refused.
+    if ! resolve_rodin_home "$RODIN_INSTALL_DIR" >/dev/null; then
+        refuse_foreign_dir "$RODIN_INSTALL_DIR" rodin.ini
+    fi
 
-    local rodin_env staging java_bin_dir ini_tmp
+    local rodin_env staging staging_home java_bin_dir ini_tmp
     rodin_env="$("$SCRIPT_DIR/rodin-version.sh" "$RODIN_VERSION_ARG" \
         ${RODIN_TARBALL_ARG:+"$RODIN_TARBALL_ARG"})"
     eval "$rodin_env"
@@ -247,18 +282,26 @@ install_rodin() {
     staging="$(mktemp -d "$PREFIX/.rodin-staging.XXXXXX")"
     TMP_PATHS+=("$staging")
     fetch_and_unpack "$RODIN_URL" "$staging"
-    chmod +x "$staging/rodin"
+    if ! staging_home="$(resolve_rodin_home "$staging")"; then
+        echo "ERROR: unpacked Rodin archive has no rodin.ini" >&2
+        exit 1
+    fi
+    # Fails loudly when the archive carries no launcher binary where
+    # its layout says one belongs.
+    chmod +x "$(resolve_rodin_launcher "$staging")"
 
     # Point Rodin at the JVM that will run it. Use the PATH entry's
     # directory without resolving symlinks — alternatives-style links
     # stay valid across JDK package upgrades, a resolved versioned
-    # directory does not. Prepend via a temp file: BSD sed has no GNU
-    # -i/1i semantics.
+    # directory does not. Prepend via a temp file and write back with
+    # cat: BSD sed has no GNU -i/1i semantics, and an mv would replace
+    # rodin.ini's mode with mktemp's 0600.
     java_bin_dir="$(dirname "$(command -v java)")"
-    if [ "$(head -1 "$staging/rodin.ini")" != "-vm" ]; then
+    if [ "$(head -1 "$staging_home/rodin.ini")" != "-vm" ]; then
         ini_tmp="$(mktemp)"
-        printf -- '-vm\n%s\n' "$java_bin_dir" | cat - "$staging/rodin.ini" > "$ini_tmp"
-        mv "$ini_tmp" "$staging/rodin.ini"
+        printf -- '-vm\n%s\n' "$java_bin_dir" | cat - "$staging_home/rodin.ini" > "$ini_tmp"
+        cat "$ini_tmp" > "$staging_home/rodin.ini"
+        rm -f "$ini_tmp"
     fi
 
     rm -rf "$RODIN_INSTALL_DIR"
@@ -274,26 +317,29 @@ install_rodin() {
 FEATURE_IUS="org.eventb.smt.feature.group,com.clearsy.atelierb.provers.feature.group,de.prob2.feature.feature.group,de.prob2.disprover.feature.feature.group,de.prob2.symbolic.feature.feature.group"
 
 # One marker plugin per installed feature family; all present means the
-# director run completed, so an interrupted install is retried.
+# director run completed, so an interrupted install is retried. Takes
+# the already-resolved Rodin home.
 plugins_complete() {
-    [ -n "$(find_prob_plugin "$RODIN_INSTALL_DIR")" ] \
-        && [ -n "$(resolve_latest_jar "$RODIN_INSTALL_DIR/plugins" org.eventb.smt.core)" ] \
-        && [ -n "$(resolve_latest_jar "$RODIN_INSTALL_DIR/plugins" com.clearsy.atelierb.provers.core)" ]
+    local home="$1"
+    [ -n "$(find_prob_plugin "$home")" ] \
+        && [ -n "$(resolve_latest_jar "$home/plugins" org.eventb.smt.core)" ] \
+        && [ -n "$(resolve_latest_jar "$home/plugins" com.clearsy.atelierb.provers.core)" ]
 }
 
 run_p2_director() {
-    local launcher_jar="$1"
-    shift
+    local destination="$1" launcher_jar="$2"
+    shift 2
     java "${JDK_XML_RELAXED_OPTS[@]}" \
         -jar "$launcher_jar" \
         -nosplash \
         -application org.eclipse.equinox.p2.director \
-        -destination "$RODIN_INSTALL_DIR" \
+        -destination "$destination" \
         "$@"
 }
 
 install_prob() {
-    if [ ! -e "$RODIN_INSTALL_DIR/rodin.ini" ]; then
+    local rodin_home
+    if ! rodin_home="$(resolve_rodin_home "$RODIN_INSTALL_DIR")"; then
         echo "ERROR: Rodin not found at $RODIN_INSTALL_DIR — run the rodin phase first" >&2
         exit 1
     fi
@@ -315,7 +361,7 @@ install_prob() {
         echo "ProB CLI installed at $PROB_INSTALL_DIR"
     fi
 
-    if [ "$FORCE" -eq 0 ] && plugins_complete; then
+    if [ "$FORCE" -eq 0 ] && plugins_complete "$rodin_home"; then
         echo "ProB Rodin plugins already installed in $RODIN_INSTALL_DIR (use --force to reinstall)"
         return 0
     fi
@@ -326,25 +372,25 @@ install_prob() {
     # a release name using the quarterly cadence: 4.24=2022-06, each +1 minor
     # = +3 months.
     local eclipse_minor offset total_months eclipse_release launcher_jar
-    eclipse_minor="$(grep '^version=' "$RODIN_INSTALL_DIR/.eclipseproduct" | cut -d. -f2)"
+    eclipse_minor="$(grep '^version=' "$rodin_home/.eclipseproduct" | cut -d. -f2)"
     offset=$(( eclipse_minor - 24 ))
     total_months=$(( 5 + offset * 3 ))
     eclipse_release="$(( 2022 + total_months / 12 ))-$(printf '%02d' $(( total_months % 12 + 1 )))"
     echo "Using Eclipse release $eclipse_release for dependencies (platform 4.$eclipse_minor)"
 
-    launcher_jar="$(resolve_latest_jar "$RODIN_INSTALL_DIR/plugins" org.eclipse.equinox.launcher)"
+    launcher_jar="$(resolve_latest_jar "$rodin_home/plugins" org.eclipse.equinox.launcher)"
     if [ -z "$launcher_jar" ]; then
-        echo "ERROR: equinox launcher JAR not found in $RODIN_INSTALL_DIR/plugins" >&2
+        echo "ERROR: equinox launcher JAR not found in $rodin_home/plugins" >&2
         exit 1
     fi
 
     # The director cannot install IUs over themselves; on --force (or a
     # partial previous run) remove what is there first, best-effort.
-    if [ -n "$(find_prob_plugin "$RODIN_INSTALL_DIR")" ]; then
-        run_p2_director "$launcher_jar" -uninstallIU "$FEATURE_IUS" || true
+    if [ -n "$(find_prob_plugin "$rodin_home")" ]; then
+        run_p2_director "$rodin_home" "$launcher_jar" -uninstallIU "$FEATURE_IUS" || true
     fi
 
-    run_p2_director "$launcher_jar" \
+    run_p2_director "$rodin_home" "$launcher_jar" \
         -repository "https://rodin-b-sharp.sourceforge.net/updates/,https://www.atelierb.eu/update_site/atelierb_provers,https://stups.hhu-hosting.de/rodin/prob1/release/,https://download.eclipse.org/releases/$eclipse_release/" \
         -installIU "$FEATURE_IUS"
 

@@ -27,6 +27,14 @@ fail() {
     exit 1
 }
 
+# Run a lib function in a fresh subshell (the common unit-test shape).
+lib_call() {
+    (
+        . "$ROOT_DIR/rodin-headless-lib.sh"
+        "$@"
+    )
+}
+
 assert_eq() {
     local expected="$1"
     local actual="$2"
@@ -141,7 +149,9 @@ EOF
     chmod +x "$tmpbin/docker"
 }
 
-# Stub uname so platform detection sees the given OS and architecture.
+# Stub uname so platform detection sees the given OS and architecture;
+# INSTALLER_TEST_OS/INSTALLER_TEST_ARCH override the baked-in defaults
+# per invocation.
 make_uname_stub() {
     local tmpbin="$1" os="$2" arch="$3"
 
@@ -150,8 +160,8 @@ make_uname_stub() {
 set -euo pipefail
 
 case "\${1:-}" in
-    -s) printf '%s\n' "$os" ;;
-    -m) printf '%s\n' "$arch" ;;
+    -s) printf '%s\n' "\${INSTALLER_TEST_OS:-$os}" ;;
+    -m) printf '%s\n' "\${INSTALLER_TEST_ARCH:-$arch}" ;;
     *)  /usr/bin/uname "\$@" ;;
 esac
 EOF
@@ -208,9 +218,12 @@ esac
 EOF
     chmod +x "$tmpbin/curl"
 
-    stable_output="$(PATH="$tmpbin:$PATH" "$ROOT_DIR/rodin-version.sh")"
-    rc_output="$(PATH="$tmpbin:$PATH" "$ROOT_DIR/rodin-version.sh" latest-rc)"
-    pinned_output="$(PATH="$tmpbin:$PATH" "$ROOT_DIR/rodin-version.sh" 3.9 rodin-pinned.tar.gz)"
+    # Pinned to the Linux platform: the stub listings carry Linux
+    # tarball names, while host detection would pick the macOS suffix
+    # when the suite runs on a mac.
+    stable_output="$(RODIN_PLATFORM=linux-x86_64 PATH="$tmpbin:$PATH" "$ROOT_DIR/rodin-version.sh")"
+    rc_output="$(RODIN_PLATFORM=linux-x86_64 PATH="$tmpbin:$PATH" "$ROOT_DIR/rodin-version.sh" latest-rc)"
+    pinned_output="$(RODIN_PLATFORM=linux-x86_64 PATH="$tmpbin:$PATH" "$ROOT_DIR/rodin-version.sh" 3.9 rodin-pinned.tar.gz)"
 
     assert_contains "$pinned_output" \
         "export RODIN_URL='https://sourceforge.net/projects/rodin-b-sharp/files/Core_Rodin_Platform/3.9/rodin-pinned.tar.gz/download'" \
@@ -224,6 +237,56 @@ EOF
         "rodin-version should select the highest release candidate"
     assert_contains "$rc_output" "export RODIN_TARBALL='rodin-3.11-RC2-linux.gtk.x86_64.tar.gz'" \
         "rodin-version should fetch the tarball for the selected release candidate"
+}
+
+test_rodin_version_selects_platform_tarballs() {
+    local tmpbin aarch64_output x86_64_output
+    tmpbin="$(new_tmpdir)"
+
+    cat > "$tmpbin/curl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+url="${@: -1}"
+
+case "$url" in
+    */Core_Rodin_Platform/3.10-RC2/)
+        cat <<'OUT'
+rodin-3.10.0-RC2-linux.gtk.x86_64.tar.gz
+rodin-3.10.0-RC2-macosx.cocoa.aarch64.tar.gz
+rodin-3.10.0-RC2-macosx.cocoa.x86_64.tar.gz
+OUT
+        ;;
+    */Core_Rodin_Platform/3.9/)
+        cat <<'OUT'
+rodin-3.9.0-linux.gtk.x86_64.tar.gz
+rodin-3.9.0-macosx.cocoa.x86_64.tar.gz
+OUT
+        ;;
+    *)
+        printf 'unexpected url: %s\n' "$url" >&2
+        exit 1
+        ;;
+esac
+EOF
+    chmod +x "$tmpbin/curl"
+
+    aarch64_output="$(RODIN_PLATFORM=macos-aarch64 PATH="$tmpbin:$PATH" \
+        "$ROOT_DIR/rodin-version.sh" 3.10-RC2)"
+    assert_contains "$aarch64_output" \
+        "export RODIN_TARBALL='rodin-3.10.0-RC2-macosx.cocoa.aarch64.tar.gz'" \
+        "rodin-version should select the arm64 mac tarball on macos-aarch64"
+
+    x86_64_output="$(RODIN_PLATFORM=macos-x86_64 PATH="$tmpbin:$PATH" \
+        "$ROOT_DIR/rodin-version.sh" 3.9)"
+    assert_contains "$x86_64_output" \
+        "export RODIN_TARBALL='rodin-3.9.0-macosx.cocoa.x86_64.tar.gz'" \
+        "rodin-version should select the intel mac tarball on macos-x86_64"
+
+    # 3.9 ships no arm64 mac build: never fall back to x86_64 (no Rosetta)
+    assert_fails_with "macOS arm64 build" \
+        env RODIN_PLATFORM=macos-aarch64 PATH="$tmpbin:$PATH" \
+        "$ROOT_DIR/rodin-version.sh" 3.9
 }
 
 test_prob_version_uses_highest_release() {
@@ -252,12 +315,22 @@ esac
 EOF
     chmod +x "$tmpbin/curl"
 
-    output="$(PATH="$tmpbin:$PATH" "$ROOT_DIR/prob-version.sh")"
+    output="$(RODIN_PLATFORM=linux-x86_64 PATH="$tmpbin:$PATH" "$ROOT_DIR/prob-version.sh")"
 
     assert_contains "$output" "export PROB_VERSION='1.15.10'" \
         "prob-version should select the highest stable release"
     assert_contains "$output" "export PROB_URL='https://stups.hhu-hosting.de/downloads/prob/tcltk/releases/1.15.10/ProB.linux64.tar.gz'" \
         "prob-version should emit the selected release download URL"
+
+    output="$(RODIN_PLATFORM=macos-aarch64 PATH="$tmpbin:$PATH" "$ROOT_DIR/prob-version.sh")"
+    assert_contains "$output" "export PROB_URL='https://stups.hhu-hosting.de/downloads/prob/tcltk/releases/1.15.10/ProB.macos.zip'" \
+        "prob-version should emit the universal macOS archive on Darwin platforms"
+
+    # A typo must fail loudly, not silently select the Linux archive
+    assert_fails_with "RODIN_PLATFORM must be" \
+        env RODIN_PLATFORM=macos PATH="$tmpbin:$PATH" "$ROOT_DIR/prob-version.sh"
+    assert_fails_with "RODIN_PLATFORM must be" \
+        env RODIN_PLATFORM=darwin-arm64 PATH="$tmpbin:$PATH" "$ROOT_DIR/rodin-version.sh" 3.9
 }
 
 test_rodin_build_forces_amd64_on_apple_silicon() {
@@ -418,6 +491,70 @@ test_rodin_headless_requires_prob_plugin() {
     assert_fails_with "ERROR: ProB Rodin plugin not installed in $rodin_dir" \
         env DISPLAY=:0 RODIN_DIR="$rodin_dir" MODELS_DIR="$models_dir" \
         "$ROOT_DIR/rodin-headless.sh" model.zip
+}
+
+test_resolve_rodin_home_handles_layouts() {
+    local tmpdir
+    tmpdir="$(new_tmpdir)"
+
+    mkdir -p "$tmpdir/linux"
+    : > "$tmpdir/linux/rodin.ini"
+    mkdir -p "$tmpdir/mac/Contents/Eclipse"
+    : > "$tmpdir/mac/Contents/Eclipse/rodin.ini"
+    mkdir -p "$tmpdir/bundle/rodin.app/Contents/Eclipse"
+    : > "$tmpdir/bundle/rodin.app/Contents/Eclipse/rodin.ini"
+    mkdir -p "$tmpdir/empty"
+
+    assert_eq "$tmpdir/linux" "$(lib_call resolve_rodin_home "$tmpdir/linux")" \
+        "rodin home resolution should accept the Linux tarball layout"
+    assert_eq "$tmpdir/mac/Contents/Eclipse" "$(lib_call resolve_rodin_home "$tmpdir/mac")" \
+        "rodin home resolution should accept the unpacked macOS app layout"
+    assert_eq "$tmpdir/bundle/rodin.app/Contents/Eclipse" \
+        "$(lib_call resolve_rodin_home "$tmpdir/bundle")" \
+        "rodin home resolution should accept a directory containing an app bundle"
+
+    if lib_call resolve_rodin_home "$tmpdir/empty" >/dev/null; then
+        fail "rodin home resolution should fail when no rodin.ini exists"
+    fi
+
+    # The launcher path must track the same layout knowledge
+    assert_eq "$tmpdir/linux/rodin" "$(lib_call resolve_rodin_launcher "$tmpdir/linux")" \
+        "launcher resolution should use the root binary on Linux layouts"
+    assert_eq "$tmpdir/bundle/rodin.app/Contents/MacOS/rodin" \
+        "$(lib_call resolve_rodin_launcher "$tmpdir/bundle")" \
+        "launcher resolution should use the bundle binary on macOS layouts"
+}
+
+test_rodin_wrapper_detects_mac_app_bundle_install() {
+    local tmpbin rodin_dir models_dir marker output status
+    tmpbin="$(new_tmpdir)"
+    rodin_dir="$(new_tmpdir)/rodin"
+    models_dir="$(new_tmpdir)"
+    marker="$tmpbin/runtime-called"
+
+    mkdir -p "$rodin_dir/Contents/Eclipse"
+    : > "$rodin_dir/Contents/Eclipse/rodin.ini"
+    make_runtime_tripwire_stubs "$tmpbin" "$marker"
+
+    set +e
+    output="$(
+        cd "$models_dir" \
+            && RODIN_DIR="$rodin_dir" DISPLAY=:0 PATH="$tmpbin:$PATH" \
+                "$ROOT_DIR/rodin" build 2>&1
+    )"
+    status=$?
+    set -e
+
+    if [ "$status" -eq 0 ]; then
+        fail "native build in an empty directory should fail"
+    fi
+    assert_contains "$output" "Using native Rodin at $rodin_dir" \
+        "rodin wrapper should select a macOS app-bundle install"
+    assert_contains "$output" "ERROR: No .zip archives found in $models_dir" \
+        "rodin wrapper should dispatch the app-bundle install to the engine"
+    if [ -e "$marker" ]; then
+        fail "rodin wrapper should not invoke docker when an app-bundle install exists"
+    fi
 }
 
 test_find_archive_project_root_supports_context_only_models() {
@@ -592,36 +729,27 @@ EOF
 }
 
 test_timeout_duration_parsing() {
-    local seconds
+    assert_eq "3600" "$(lib_call timeout_duration_to_seconds 60m)" \
+        "duration parsing should convert minutes"
+    assert_eq "30" "$(lib_call timeout_duration_to_seconds 30s)" \
+        "duration parsing should convert seconds"
+    assert_eq "7" "$(lib_call timeout_duration_to_seconds 7)" \
+        "duration parsing should accept plain seconds"
+    assert_eq "7200" "$(lib_call timeout_duration_to_seconds 2h)" \
+        "duration parsing should convert hours"
 
-    seconds="$(
-        . "$ROOT_DIR/rodin-headless-lib.sh"
-        timeout_duration_to_seconds 60m
-    )"
-    assert_eq "3600" "$seconds" "duration parsing should convert minutes"
-
-    seconds="$(
-        . "$ROOT_DIR/rodin-headless-lib.sh"
-        timeout_duration_to_seconds 30s
-    )"
-    assert_eq "30" "$seconds" "duration parsing should convert seconds"
-
-    seconds="$(
-        . "$ROOT_DIR/rodin-headless-lib.sh"
-        timeout_duration_to_seconds 7
-    )"
-    assert_eq "7" "$seconds" "duration parsing should accept plain seconds"
-
-    seconds="$(
-        . "$ROOT_DIR/rodin-headless-lib.sh"
-        timeout_duration_to_seconds 2h
-    )"
-    assert_eq "7200" "$seconds" "duration parsing should convert hours"
+    # GNU timeout accepts fractional durations; the fallback rounds up
+    assert_eq "5400" "$(lib_call timeout_duration_to_seconds 1.5h)" \
+        "duration parsing should convert fractional hours"
+    assert_eq "1" "$(lib_call timeout_duration_to_seconds 0.5s)" \
+        "duration parsing should round fractional seconds up"
 
     assert_fails_with "invalid timeout duration" \
-        bash -c ". '$ROOT_DIR/rodin-headless-lib.sh'; timeout_duration_to_seconds 5x"
+        lib_call timeout_duration_to_seconds 5x
     assert_fails_with "invalid timeout duration" \
-        bash -c ". '$ROOT_DIR/rodin-headless-lib.sh'; timeout_duration_to_seconds m"
+        lib_call timeout_duration_to_seconds m
+    assert_fails_with "invalid timeout duration" \
+        lib_call timeout_duration_to_seconds 1.2.3s
 }
 
 test_watchdog_timeout_preserves_command_status() {
@@ -633,10 +761,7 @@ test_watchdog_timeout_preserves_command_status() {
     chmod +x "$command"
 
     set +e
-    (
-        . "$ROOT_DIR/rodin-headless-lib.sh"
-        run_with_watchdog_timeout 5s 1s "$command"
-    )
+    lib_call run_with_watchdog_timeout 5s 1s "$command"
     status=$?
     set -e
 
@@ -648,15 +773,25 @@ test_watchdog_timeout_kills_overrunning_command() {
     local status
 
     set +e
-    (
-        . "$ROOT_DIR/rodin-headless-lib.sh"
-        run_with_watchdog_timeout 1s 1s sleep 10
-    )
+    lib_call run_with_watchdog_timeout 1s 1s sleep 10
     status=$?
     set -e
 
     assert_eq "124" "$status" \
         "watchdog timeout should report 124 when the command overruns"
+}
+
+test_watchdog_timeout_zero_duration_disables() {
+    local status
+
+    # GNU timeout semantics: a zero duration means no timeout at all
+    set +e
+    lib_call run_with_watchdog_timeout 0s 1s bash -c 'exit 5'
+    status=$?
+    set -e
+
+    assert_eq "5" "$status" \
+        "a zero watchdog duration should run the command untimed"
 }
 
 test_run_with_optional_timeout_falls_back_to_gtimeout() {
@@ -705,9 +840,14 @@ test_lock_helpers_acquire_and_release() {
 make_spinlock_path() {
     local tmpbin="$1" tool
 
-    for tool in mkdir rm cat date sleep; do
+    for tool in mkdir rm sleep mv; do
         ln -s "$(command -v "$tool")" "$tmpbin/$tool"
     done
+    # ps backs the cross-user liveness check; optional in the lib, so
+    # only link it where the host has one.
+    if command -v ps >/dev/null 2>&1; then
+        ln -s "$(command -v ps)" "$tmpbin/ps"
+    fi
 }
 
 test_lock_helpers_mkdir_fallback_without_flock() {
@@ -762,6 +902,21 @@ test_rodin_headless_wraps_launch_with_timeout() {
         "headless script should wrap the Rodin launch with the timeout helper"
     assert_contains "$script" "skipping archive repackaging" \
         "headless script should avoid repackaging partial timeout results"
+    assert_contains "$script" "could not enforce RODIN_BUILD_TIMEOUT" \
+        "headless script should not repackage when the timeout tool itself failed"
+}
+
+# Layout handling itself is covered behaviorally by
+# test_rodin_wrapper_detects_mac_app_bundle_install; this only guards
+# the SWT cocoa flag, which no test can exercise without a real JVM.
+test_rodin_headless_supports_macos_layout() {
+    local script
+    script="$(cat "$ROOT_DIR/rodin-headless.sh")"
+
+    assert_contains "$script" '-XstartOnFirstThread' \
+        "headless script should pass SWT's cocoa first-thread flag"
+    assert_contains "$script" 'if [ "$(host_os)" = Darwin ]; then' \
+        "the cocoa first-thread flag must stay Darwin-conditional"
 }
 
 test_remove_exact_line_only_removes_matching_bundle_registration() {
@@ -846,17 +1001,27 @@ test_validate_deadlock_check_uses_eventb_true_ast() {
         "headless script should avoid GNU-only grep -P"
 }
 
+# Shared Eclipse-layout content for the Rodin fixtures: the values
+# feed install_prob's release arithmetic (.eclipseproduct) and the
+# launcher-jar resolution, so both platform fixtures must agree.
+populate_rodin_eclipse_layout() {
+    local dir="$1"
+
+    mkdir -p "$dir/plugins"
+    printf -- '-startup\nplugins/launcher.jar\n' > "$dir/rodin.ini"
+    printf 'name=Rodin Platform\nversion=4.34.0\n' > "$dir/.eclipseproduct"
+    : > "$dir/plugins/org.eclipse.equinox.launcher_1.6.400.jar"
+}
+
 make_rodin_fixture_tarball() {
     local destination="$1"
     local staging
 
     staging="$(new_tmpdir)"
-    mkdir -p "$staging/rodin/plugins"
+    mkdir -p "$staging/rodin"
+    populate_rodin_eclipse_layout "$staging/rodin"
     printf '#!/bin/sh\nexit 0\n' > "$staging/rodin/rodin"
     chmod +x "$staging/rodin/rodin"
-    printf -- '-startup\nplugins/launcher.jar\n' > "$staging/rodin/rodin.ini"
-    printf 'name=Rodin Platform\nversion=4.34.0\n' > "$staging/rodin/.eclipseproduct"
-    : > "$staging/rodin/plugins/org.eclipse.equinox.launcher_1.6.400.jar"
     tar czf "$destination" -C "$staging" rodin
 }
 
@@ -869,6 +1034,32 @@ make_prob_fixture_tarball() {
     printf '#!/bin/sh\nexit 0\n' > "$staging/prob/probcli"
     chmod +x "$staging/prob/probcli"
     tar czf "$destination" -C "$staging" prob
+}
+
+# The macOS Rodin tarball wraps the Eclipse layout in an app bundle.
+make_rodin_mac_fixture_tarball() {
+    local destination="$1"
+    local staging
+
+    staging="$(new_tmpdir)"
+    mkdir -p "$staging/rodin.app/Contents/MacOS"
+    populate_rodin_eclipse_layout "$staging/rodin.app/Contents/Eclipse"
+    printf '#!/bin/sh\nexit 0\n' > "$staging/rodin.app/Contents/MacOS/rodin"
+    chmod +x "$staging/rodin.app/Contents/MacOS/rodin"
+    tar czf "$destination" -C "$staging" rodin.app
+}
+
+# The macOS ProB archive is a flat zip: probcli sits at the root.
+make_prob_mac_fixture_zip() {
+    local destination="$1"
+    local staging
+
+    staging="$(new_tmpdir)"
+    mkdir -p "$staging/lib"
+    printf '#!/bin/sh\nexit 0\n' > "$staging/probcli"
+    chmod +x "$staging/probcli"
+    : > "$staging/lib/probcliparser.jar"
+    (cd "$staging" && zip -q -r "$destination" .)
 }
 
 make_installer_stubs() {
@@ -906,15 +1097,8 @@ exit 0
 EOF
     # Pin the platform the installer sees, so the suite runs on any
     # host; tests override via INSTALLER_TEST_OS/INSTALLER_TEST_ARCH.
-    cat > "$tmpbin/uname" <<'EOF'
-#!/usr/bin/env bash
-case "${1:-}" in
-    -s) printf '%s\n' "${INSTALLER_TEST_OS:-Linux}" ;;
-    -m) printf '%s\n' "${INSTALLER_TEST_ARCH:-x86_64}" ;;
-    *)  /usr/bin/uname "$@" ;;
-esac
-EOF
-    chmod +x "$tmpbin/curl" "$tmpbin/java" "$tmpbin/uname"
+    make_uname_stub "$tmpbin" Linux x86_64
+    chmod +x "$tmpbin/curl" "$tmpbin/java"
 }
 
 # The fixtures and stubs are immutable, so they are built once for the
@@ -925,8 +1109,12 @@ setup_installer_fixture() {
         INSTALLER_SUITE_BIN="$(new_tmpdir)"
         export INSTALLER_TEST_RODIN_TARBALL="$INSTALLER_SUITE_BIN/rodin-fixture.tar.gz"
         export INSTALLER_TEST_PROB_TARBALL="$INSTALLER_SUITE_BIN/prob-fixture.tar.gz"
+        export INSTALLER_TEST_RODIN_MAC_TARBALL="$INSTALLER_SUITE_BIN/rodin-mac-fixture.tar.gz"
+        export INSTALLER_TEST_PROB_MAC_ZIP="$INSTALLER_SUITE_BIN/prob-mac-fixture.zip"
         make_rodin_fixture_tarball "$INSTALLER_TEST_RODIN_TARBALL"
         make_prob_fixture_tarball "$INSTALLER_TEST_PROB_TARBALL"
+        make_rodin_mac_fixture_tarball "$INSTALLER_TEST_RODIN_MAC_TARBALL"
+        make_prob_mac_fixture_zip "$INSTALLER_TEST_PROB_MAC_ZIP"
         make_installer_stubs "$INSTALLER_SUITE_BIN"
     fi
     INSTALLER_TMPBIN="$INSTALLER_SUITE_BIN"
@@ -944,6 +1132,14 @@ run_installer() {
 install_rodin_fixture() {
     run_installer --prefix "$INSTALLER_PREFIX" --only rodin \
         --rodin-version 3.9 --rodin-tarball rodin-3.9-linux.gtk.x86_64.tar.gz "$@"
+}
+
+install_darwin_rodin_fixture() {
+    INSTALLER_TEST_OS=Darwin INSTALLER_TEST_ARCH=arm64 \
+    INSTALLER_TEST_RODIN_TARBALL="$INSTALLER_TEST_RODIN_MAC_TARBALL" \
+        run_installer --prefix "$INSTALLER_PREFIX" --only rodin \
+            --rodin-version 3.10-RC2 \
+            --rodin-tarball rodin-3.10.0-RC2-macosx.cocoa.aarch64.tar.gz "$@"
 }
 
 test_installer_check_deps_reports_missing_tools() {
@@ -1086,6 +1282,47 @@ test_installer_plugin_completeness_and_force() {
         "--force should reinstall the features after the uninstall pass"
 }
 
+test_installer_darwin_installs_rodin_app_bundle() {
+    setup_installer_fixture
+
+    install_darwin_rodin_fixture > /dev/null
+
+    if [ ! -x "$INSTALLER_PREFIX/rodin/Contents/MacOS/rodin" ]; then
+        fail "darwin install should unpack an executable app-bundle launcher"
+    fi
+    assert_eq "-vm" "$(head -1 "$INSTALLER_PREFIX/rodin/Contents/Eclipse/rodin.ini")" \
+        "darwin install should prepend the -vm directive inside the app bundle"
+
+    local output
+    output="$(install_darwin_rodin_fixture)"
+    assert_contains "$output" "already installed" \
+        "a second darwin install run should recognize the app-bundle layout"
+}
+
+test_installer_darwin_prob_phase_unpacks_flat_zip() {
+    setup_installer_fixture
+
+    install_darwin_rodin_fixture > /dev/null
+
+    INSTALLER_TEST_OS=Darwin INSTALLER_TEST_ARCH=arm64 \
+    INSTALLER_TEST_PROB_TARBALL="$INSTALLER_TEST_PROB_MAC_ZIP" \
+        run_installer --prefix "$INSTALLER_PREFIX" --only prob --prob-version 1.15.1 \
+            > /dev/null
+
+    if [ ! -x "$INSTALLER_PREFIX/prob/probcli" ]; then
+        fail "darwin prob phase should unpack probcli from the flat macOS zip"
+    fi
+
+    assert_contains "$(cat "$INSTALLER_TEST_CURL_LOG")" "ProB.macos.zip" \
+        "darwin prob phase should download the universal macOS archive"
+
+    local args
+    args="$(cat "$INSTALLER_TEST_JAVA_ARGS")"
+    assert_contains "$args" "<-destination>
+<$INSTALLER_PREFIX/rodin/Contents/Eclipse>" \
+        "darwin prob phase should aim the p2 director at the bundle's Eclipse root"
+}
+
 test_dockerfile_installs_headless_helper() {
     local dockerfile
     dockerfile="$(cat "$ROOT_DIR/Dockerfile")"
@@ -1116,16 +1353,26 @@ test_dockerfile_installs_headless_helper() {
 }
 
 main() {
+    local tool
+    for tool in zip unzip; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            fail "$tool is required to run the test suite (used by the macOS archive fixtures)"
+        fi
+    done
+
     test_rodin_help_skips_runtime
     test_rodin_version_uses_highest_release
+    test_rodin_version_selects_platform_tarballs
     test_prob_version_uses_highest_release
     test_rodin_build_forces_amd64_on_apple_silicon
     test_rodin_build_omits_platform_on_x86_64
     test_rodin_forwards_timeout_environment
     test_rodin_wrapper_prefers_native_install
+    test_rodin_wrapper_detects_mac_app_bundle_install
     test_rodin_runtime_docker_overrides_native
     test_rodin_headless_rejects_missing_archives
     test_rodin_headless_requires_prob_plugin
+    test_resolve_rodin_home_handles_layouts
     test_find_archive_project_root_supports_context_only_models
     test_find_archive_project_root_falls_back_to_project_metadata
     test_run_with_filtered_output_preserves_failure_status
@@ -1136,11 +1383,13 @@ main() {
     test_timeout_duration_parsing
     test_watchdog_timeout_preserves_command_status
     test_watchdog_timeout_kills_overrunning_command
+    test_watchdog_timeout_zero_duration_disables
     test_run_with_optional_timeout_falls_back_to_gtimeout
     test_lock_helpers_acquire_and_release
     test_lock_helpers_mkdir_fallback_without_flock
     test_lock_helpers_reclaim_stale_lock
     test_rodin_headless_wraps_launch_with_timeout
+    test_rodin_headless_supports_macos_layout
     test_remove_exact_line_only_removes_matching_bundle_registration
     test_resolve_latest_plugin_paths_use_version_sorting
     test_prob_core_dependency_glob_uses_resolved_directory
@@ -1152,6 +1401,8 @@ main() {
     test_installer_refuses_foreign_target_dir
     test_installer_prob_phase_runs_p2_director
     test_installer_plugin_completeness_and_force
+    test_installer_darwin_installs_rodin_app_bundle
+    test_installer_darwin_prob_phase_unpacks_flat_zip
     test_dockerfile_installs_headless_helper
     printf 'PASS: %s\n' "tests/run.sh"
 }

@@ -1,6 +1,6 @@
 # rodin-headless
 
-Headless toolchain for building, model-checking, and proving [Rodin](https://wiki.event-b.org/index.php/Main_Page) Event-B models — natively on Linux or via Docker. Feed it `.zip` archives containing Event-B models and get back static-checked artifacts (`.bcm`/`.bcc`), model checking results, and proof obligation discharge reports.
+Headless toolchain for building, model-checking, and proving [Rodin](https://wiki.event-b.org/index.php/Main_Page) Event-B models — natively on Linux or macOS, or via Docker. Feed it `.zip` archives containing Event-B models and get back static-checked artifacts (`.bcm`/`.bcc`), model checking results, and proof obligation discharge reports.
 
 ## Quick Start
 
@@ -13,7 +13,7 @@ cd rodin-headless
 
 The `rodin` wrapper picks a runtime automatically: a native Rodin install if one is present, otherwise the Docker image (auto-built on first run, current directory mounted). Built artifacts are written back into the zip in-place.
 
-### Native install (Linux x86_64)
+### Native install (Linux x86_64, macOS)
 
 ```bash
 ./rodin-install.sh --check-deps   # report missing system packages
@@ -22,6 +22,8 @@ The `rodin` wrapper picks a runtime automatically: a native Rodin install if one
 ```
 
 The installer downloads Rodin and the ProB CLI, points `rodin.ini` at your JVM, and installs the ProB/SMT/Atelier B Rodin plugins — into `~/.local/share/rodin-headless` by default (override with `--prefix DIR` or `RODIN_PREFIX`). It never uses sudo; system packages (JDK 21+, GTK3, Xvfb, zip/unzip) are reported by `--check-deps` with install hints instead.
+
+On macOS the only prerequisite is a JDK 21+ (e.g. Temurin) — everything else ships with the system, and the engine has built-in fallbacks for the GNU `flock`/`timeout` tools. Apple Silicon needs Rodin 3.10 or later, the first release with arm64 mac builds; until 3.10 final ships, install it with `--rodin-version latest-rc` (3.9 mac builds are x86_64-only and are never selected on arm64).
 
 ```bash
 ./rodin-install.sh [--prefix DIR] [--only rodin|prob] [--force]
@@ -180,10 +182,12 @@ docker build \
   -t rodin-headless .
 ```
 
-On Apple Silicon Macs, native mode is unavailable (Rodin and ProB publish
-Linux x86_64 artifacts only) — use the Docker path and build the image for
-`linux/amd64`, since native `linux/arm64` images would unpack binaries that
-cannot run:
+On macOS, native mode uses the platform Rodin build (an app bundle; the
+toolchain finds the Eclipse layout inside it automatically) and the universal
+ProB CLI. On Apple Silicon that requires Rodin 3.10+ — see the native install
+section above. Without a native install the wrapper falls back to the
+container path and builds the image for `linux/amd64`, since the container
+unpacks Linux x86_64 binaries that a native `linux/arm64` image could not run:
 
 ```bash
 docker build --platform linux/amd64 -t rodin-headless .

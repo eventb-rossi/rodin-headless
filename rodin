@@ -29,7 +29,7 @@ esac
 
 find_native_rodin() {
     if [ -n "${RODIN_DIR:-}" ]; then
-        if [ -f "$RODIN_DIR/rodin.ini" ]; then
+        if resolve_rodin_home "$RODIN_DIR" >/dev/null; then
             printf '%s\n' "$RODIN_DIR"
             return 0
         fi
@@ -40,7 +40,7 @@ find_native_rodin() {
     # install must not shadow a working container fallback.
     local default_dir
     default_dir="$(default_rodin_prefix)/rodin"
-    if [ -f "$default_dir/rodin.ini" ] && [ -n "$(find_prob_plugin "$default_dir")" ]; then
+    if resolve_rodin_home "$default_dir" >/dev/null && [ -n "$(find_prob_plugin "$default_dir")" ]; then
         printf '%s\n' "$default_dir"
         return 0
     fi
@@ -105,7 +105,7 @@ fi
 # On arm64 hosts (Apple Silicon, Linux aarch64), build an amd64 image so
 # those binaries can run under emulation instead of being unpacked into an
 # arm64 image that cannot execute them.
-case "$(uname -m)" in
+case "$(host_arch)" in
     arm64|aarch64)
         PLATFORM_ARGS=(--platform linux/amd64)
         ;;

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Resolve Rodin version and Linux tarball name from SourceForge.
+# Resolve Rodin version and platform tarball name from SourceForge.
 #
 # Usage:
 #   ./rodin-version.sh                     # latest stable
@@ -8,6 +8,9 @@
 #   ./rodin-version.sh 3.8                 # specific version
 #   ./rodin-version.sh 3.9 <tarball>       # pinned tarball, no scraping
 #
+# The tarball matches the host platform; RODIN_PLATFORM (linux-x86_64,
+# macos-x86_64, macos-aarch64) overrides the detection.
+#
 # Output (eval-friendly):
 #   export RODIN_VERSION='3.9'
 #   export RODIN_TARBALL='rodin-3.9.0...-linux.gtk.x86_64.tar.gz'
@@ -15,11 +18,22 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=rodin-headless-lib.sh
+. "$SCRIPT_DIR/rodin-headless-lib.sh"
+
 SF_BASE="https://sourceforge.net/projects/rodin-b-sharp/files/Core_Rodin_Platform"
 SAFE_PATTERN='^[a-zA-Z0-9._-]+$'
 
 MODE="${1:-latest}"
 TARBALL_OVERRIDE="${2:-}"
+
+PLATFORM="$(rodin_platform)"
+case "$PLATFORM" in
+    linux-x86_64)  TARBALL_SUFFIX='linux\.gtk\.x86_64' ;;
+    macos-x86_64)  TARBALL_SUFFIX='macosx\.cocoa\.x86_64' ;;
+    macos-aarch64) TARBALL_SUFFIX='macosx\.cocoa\.aarch64' ;;
+esac
 
 latest_by_numbers() {
     awk '{ key = $0; gsub(/[^0-9]+/, ".", key); print key "\t" $0 }' \
@@ -55,17 +69,20 @@ if [ -z "$VERSION" ]; then
     exit 1
 fi
 
-# Resolve the Linux x86_64 tarball filename (skipped when pinned)
+# Resolve the platform tarball filename (skipped when pinned)
 if [ -n "$TARBALL_OVERRIDE" ]; then
     TARBALL="$TARBALL_OVERRIDE"
 else
     listing=$(curl -fsSL --retry 2 --max-time 30 "$SF_BASE/$VERSION/")
     TARBALL=$(printf '%s\n' "$listing" \
-        | grep -Eo 'rodin-[^"]*-linux\.gtk\.x86_64\.tar\.gz' | head -1 || true)
+        | grep -Eo "rodin-[^\"]*-$TARBALL_SUFFIX\\.tar\\.gz" | head -1 || true)
 fi
 
 if [ -z "$TARBALL" ]; then
-    echo "ERROR: Could not find Linux tarball for Rodin $VERSION" >&2
+    echo "ERROR: Could not find $PLATFORM tarball for Rodin $VERSION" >&2
+    if [ "$PLATFORM" = macos-aarch64 ]; then
+        echo "Rodin ships macOS arm64 builds from 3.10 on (3.9 is x86_64-only); use --rodin-version latest-rc or 3.10+" >&2
+    fi
     exit 1
 fi
 

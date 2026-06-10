@@ -227,6 +227,8 @@ EOF
 
     RODIN_TEST_BUILD_ARGS="$build_args_file" \
     RODIN_TEST_RUN_ARGS="$run_args_file" \
+    RODIN_DIR="" \
+    RODIN_PREFIX="$tmpbin" \
     PATH="$tmpbin:$PATH" \
         "$ROOT_DIR/rodin" build model.zip
 
@@ -265,6 +267,8 @@ EOF
     RODIN_TEST_ARGS="$args_file" \
     RODIN_BUILD_TIMEOUT=2m \
     RODIN_BUILD_TIMEOUT_KILL_AFTER=5s \
+    RODIN_DIR="" \
+    RODIN_PREFIX="$tmpbin" \
     PATH="$tmpbin:$PATH" \
         "$ROOT_DIR/rodin" build model.zip
 
@@ -275,6 +279,81 @@ EOF
     assert_contains "$args" "<-e>
 <RODIN_BUILD_TIMEOUT_KILL_AFTER>" \
         "rodin wrapper should forward the timeout kill-after environment"
+}
+
+test_rodin_wrapper_prefers_native_install() {
+    local tmpbin rodin_dir models_dir marker output status
+    tmpbin="$(new_tmpdir)"
+    rodin_dir="$(new_tmpdir)/rodin"
+    models_dir="$(new_tmpdir)"
+    marker="$tmpbin/runtime-called"
+
+    mkdir -p "$rodin_dir"
+    : > "$rodin_dir/rodin.ini"
+    cat > "$tmpbin/docker" <<EOF
+#!/usr/bin/env bash
+touch "$marker"
+exit 99
+EOF
+    chmod +x "$tmpbin/docker"
+
+    set +e
+    output="$(
+        cd "$models_dir" \
+            && RODIN_DIR="$rodin_dir" DISPLAY=:0 PATH="$tmpbin:$PATH" \
+                "$ROOT_DIR/rodin" build 2>&1
+    )"
+    status=$?
+    set -e
+
+    if [ "$status" -eq 0 ]; then
+        fail "native build in an empty directory should fail"
+    fi
+    assert_contains "$output" "Using native Rodin at $rodin_dir" \
+        "rodin wrapper should announce the native install it selected"
+    assert_contains "$output" "ERROR: No .zip archives found in $models_dir" \
+        "rodin wrapper should dispatch to the headless engine natively"
+    if [ -e "$marker" ]; then
+        fail "rodin wrapper should not invoke docker when a native install exists"
+    fi
+}
+
+test_rodin_runtime_docker_overrides_native() {
+    local tmpbin rodin_dir args_file args
+    tmpbin="$(new_tmpdir)"
+    rodin_dir="$(new_tmpdir)/rodin"
+    args_file="$tmpbin/docker.args"
+
+    mkdir -p "$rodin_dir"
+    : > "$rodin_dir/rodin.ini"
+    cat > "$tmpbin/docker" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+case "$1 $2" in
+    "image inspect")
+        if [ "${3:-}" = "--format" ]; then
+            printf '%s\n' amd64
+        fi
+        exit 0
+        ;;
+esac
+
+printf '<%s>\n' "$@" > "$RODIN_TEST_ARGS"
+EOF
+    chmod +x "$tmpbin/docker"
+
+    RODIN_TEST_ARGS="$args_file" \
+    RODIN_RUNTIME=docker \
+    RODIN_DIR="$rodin_dir" \
+    PATH="$tmpbin:$PATH" \
+        "$ROOT_DIR/rodin" build model.zip
+
+    args="$(cat "$args_file")"
+    assert_contains "$args" "<run>" \
+        "RODIN_RUNTIME=docker should dispatch to the container runtime"
+    assert_contains "$args" "<rodin-headless>" \
+        "container dispatch should use the rodin-headless image"
 }
 
 test_rodin_headless_rejects_missing_archives() {
@@ -792,6 +871,8 @@ main() {
     test_prob_version_uses_highest_release
     test_rodin_build_forces_amd64_on_apple_silicon
     test_rodin_forwards_timeout_environment
+    test_rodin_wrapper_prefers_native_install
+    test_rodin_runtime_docker_overrides_native
     test_rodin_headless_rejects_missing_archives
     test_find_archive_project_root_supports_context_only_models
     test_find_archive_project_root_falls_back_to_project_metadata

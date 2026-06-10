@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
-# Thin wrapper around the rodin-headless Docker image.
-# Hides Docker details; auto-builds the image on first run.
+# Thin wrapper around the rodin-headless toolchain.
+# Runs against a native Rodin install when one is available, otherwise
+# falls back to the rodin-headless Docker image (auto-built on first run).
 #
 # Usage: ./rodin <command> [args...]
-#   Commands are the same as the Docker entrypoint (build, check, prove,
-#   validate, autoprove, probcli, help). See ./rodin help for details.
+#   Commands are the same in both modes (build, check, prove, validate,
+#   autoprove, probcli, help). See ./rodin help for details.
+#
+# Runtime selection (RODIN_RUNTIME=auto|native|docker|podman, default auto):
+#   1. RODIN_DIR pointing at a Rodin install (rodin.ini present) -> native
+#   2. ./rodin-install.sh default prefix install                 -> native
+#   3. docker or podman available                                -> container
+# Set RODIN_RUNTIME=docker (or podman) to skip native detection.
 
 set -euo pipefail
 
@@ -18,13 +25,67 @@ case "${1:-}" in
         ;;
 esac
 
+find_native_rodin() {
+    if [ -n "${RODIN_DIR:-}" ] && [ -f "$RODIN_DIR/rodin.ini" ]; then
+        printf '%s\n' "$RODIN_DIR"
+        return 0
+    fi
+    local default_dir="${RODIN_PREFIX:-$HOME/.local/share/rodin-headless}/rodin"
+    if [ -f "$default_dir/rodin.ini" ]; then
+        printf '%s\n' "$default_dir"
+        return 0
+    fi
+    return 1
+}
+
+run_native() {
+    local rodin_dir="$1"
+    shift
+    echo "Using native Rodin at $rodin_dir" >&2
+
+    local prob_dir
+    prob_dir="$(dirname "$rodin_dir")/prob"
+    if [ -x "$prob_dir/probcli" ]; then
+        export PATH="$prob_dir:$PATH"
+    fi
+
+    RODIN_DIR="$rodin_dir" MODELS_DIR="$(pwd)" \
+        exec "$SCRIPT_DIR/entrypoint.sh" "$@"
+}
+
+RODIN_RUNTIME="${RODIN_RUNTIME:-auto}"
+
+case "$RODIN_RUNTIME" in
+    auto|native)
+        if NATIVE_RODIN_DIR="$(find_native_rodin)"; then
+            run_native "$NATIVE_RODIN_DIR" "$@"
+        fi
+        if [ "$RODIN_RUNTIME" = native ]; then
+            echo "Error: no native Rodin install found" >&2
+            echo "Run ./rodin-install.sh, or point RODIN_DIR at a Rodin install" >&2
+            exit 1
+        fi
+        ;;
+    docker|podman) ;;
+    *)
+        echo "Error: RODIN_RUNTIME must be auto, native, docker, or podman (got '$RODIN_RUNTIME')" >&2
+        exit 1
+        ;;
+esac
+
 # Detect container runtime
-if command -v docker >/dev/null 2>&1; then
+if [ "$RODIN_RUNTIME" = docker ] || [ "$RODIN_RUNTIME" = podman ]; then
+    if ! command -v "$RODIN_RUNTIME" >/dev/null 2>&1; then
+        echo "Error: RODIN_RUNTIME=$RODIN_RUNTIME but $RODIN_RUNTIME is not installed" >&2
+        exit 1
+    fi
+    RUNTIME="$RODIN_RUNTIME"
+elif command -v docker >/dev/null 2>&1; then
     RUNTIME=docker
 elif command -v podman >/dev/null 2>&1; then
     RUNTIME=podman
 else
-    echo "Error: docker or podman required" >&2
+    echo "Error: docker or podman required (or run ./rodin-install.sh for a native install)" >&2
     exit 1
 fi
 

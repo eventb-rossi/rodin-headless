@@ -69,22 +69,49 @@ assert_fails_with() {
         "failing command should report the expected error"
 }
 
+# Stub docker+podman so any container-runtime invocation trips a marker.
+make_runtime_tripwire_stubs() {
+    local tmpbin="$1" marker="$2" engine
+
+    for engine in docker podman; do
+        cat > "$tmpbin/$engine" <<EOF
+#!/usr/bin/env bash
+touch "$marker"
+exit 99
+EOF
+        chmod +x "$tmpbin/$engine"
+    done
+}
+
+# Stub docker so `image inspect` reports an existing amd64 image and any
+# other invocation records its args to $RODIN_TEST_ARGS.
+make_docker_args_stub() {
+    local tmpbin="$1"
+
+    cat > "$tmpbin/docker" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+case "$1 $2" in
+    "image inspect")
+        if [ "${3:-}" = "--format" ]; then
+            printf '%s\n' amd64
+        fi
+        exit 0
+        ;;
+esac
+
+printf '<%s>\n' "$@" > "$RODIN_TEST_ARGS"
+EOF
+    chmod +x "$tmpbin/docker"
+}
+
 test_rodin_help_skips_runtime() {
     local tmpbin output marker
     tmpbin="$(new_tmpdir)"
     marker="$tmpbin/runtime-called"
 
-    cat > "$tmpbin/docker" <<EOF
-#!/usr/bin/env bash
-touch "$marker"
-exit 99
-EOF
-    cat > "$tmpbin/podman" <<EOF
-#!/usr/bin/env bash
-touch "$marker"
-exit 99
-EOF
-    chmod +x "$tmpbin/docker" "$tmpbin/podman"
+    make_runtime_tripwire_stubs "$tmpbin" "$marker"
 
     output="$(PATH="$tmpbin:$PATH" "$ROOT_DIR/rodin" help)"
 
@@ -96,7 +123,7 @@ EOF
 }
 
 test_rodin_version_uses_highest_release() {
-    local tmpbin stable_output rc_output
+    local tmpbin stable_output rc_output pinned_output
     tmpbin="$(new_tmpdir)"
 
     cat > "$tmpbin/curl" <<'EOF'
@@ -131,6 +158,11 @@ EOF
 
     stable_output="$(PATH="$tmpbin:$PATH" "$ROOT_DIR/rodin-version.sh")"
     rc_output="$(PATH="$tmpbin:$PATH" "$ROOT_DIR/rodin-version.sh" latest-rc)"
+    pinned_output="$(PATH="$tmpbin:$PATH" "$ROOT_DIR/rodin-version.sh" 3.9 rodin-pinned.tar.gz)"
+
+    assert_contains "$pinned_output" \
+        "export RODIN_URL='https://sourceforge.net/projects/rodin-b-sharp/files/Core_Rodin_Platform/3.9/rodin-pinned.tar.gz/download'" \
+        "rodin-version should emit the download URL for a pinned tarball without scraping"
 
     assert_contains "$stable_output" "export RODIN_VERSION='3.10'" \
         "rodin-version should select the highest stable release"
@@ -247,22 +279,7 @@ test_rodin_forwards_timeout_environment() {
     tmpbin="$(new_tmpdir)"
     args_file="$tmpbin/docker.args"
 
-    cat > "$tmpbin/docker" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-
-case "$1 $2" in
-    "image inspect")
-        if [ "${3:-}" = "--format" ]; then
-            printf '%s\n' amd64
-        fi
-        exit 0
-        ;;
-esac
-
-printf '<%s>\n' "$@" > "$RODIN_TEST_ARGS"
-EOF
-    chmod +x "$tmpbin/docker"
+    make_docker_args_stub "$tmpbin"
 
     RODIN_TEST_ARGS="$args_file" \
     RODIN_BUILD_TIMEOUT=2m \
@@ -290,12 +307,7 @@ test_rodin_wrapper_prefers_native_install() {
 
     mkdir -p "$rodin_dir"
     : > "$rodin_dir/rodin.ini"
-    cat > "$tmpbin/docker" <<EOF
-#!/usr/bin/env bash
-touch "$marker"
-exit 99
-EOF
-    chmod +x "$tmpbin/docker"
+    make_runtime_tripwire_stubs "$tmpbin" "$marker"
 
     set +e
     output="$(
@@ -326,22 +338,7 @@ test_rodin_runtime_docker_overrides_native() {
 
     mkdir -p "$rodin_dir"
     : > "$rodin_dir/rodin.ini"
-    cat > "$tmpbin/docker" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-
-case "$1 $2" in
-    "image inspect")
-        if [ "${3:-}" = "--format" ]; then
-            printf '%s\n' amd64
-        fi
-        exit 0
-        ;;
-esac
-
-printf '<%s>\n' "$@" > "$RODIN_TEST_ARGS"
-EOF
-    chmod +x "$tmpbin/docker"
+    make_docker_args_stub "$tmpbin"
 
     RODIN_TEST_ARGS="$args_file" \
     RODIN_RUNTIME=docker \
@@ -711,18 +708,24 @@ EOF
     chmod +x "$tmpbin/curl" "$tmpbin/java"
 }
 
-# Builds the fixtures and stubs once per test and exports the stub
-# wiring; tests then use run_installer / install_rodin_fixture.
+# The fixtures and stubs are immutable, so they are built once for the
+# whole suite; per test only the prefix and the stub logs are fresh.
+INSTALLER_SUITE_BIN=""
 setup_installer_fixture() {
-    INSTALLER_TMPBIN="$(new_tmpdir)"
+    if [ -z "$INSTALLER_SUITE_BIN" ]; then
+        INSTALLER_SUITE_BIN="$(new_tmpdir)"
+        export INSTALLER_TEST_RODIN_TARBALL="$INSTALLER_SUITE_BIN/rodin-fixture.tar.gz"
+        export INSTALLER_TEST_PROB_TARBALL="$INSTALLER_SUITE_BIN/prob-fixture.tar.gz"
+        make_rodin_fixture_tarball "$INSTALLER_TEST_RODIN_TARBALL"
+        make_prob_fixture_tarball "$INSTALLER_TEST_PROB_TARBALL"
+        make_installer_stubs "$INSTALLER_SUITE_BIN"
+    fi
+    INSTALLER_TMPBIN="$INSTALLER_SUITE_BIN"
     INSTALLER_PREFIX="$(new_tmpdir)/install"
     export INSTALLER_TEST_CURL_LOG="$INSTALLER_TMPBIN/curl.log"
     export INSTALLER_TEST_JAVA_ARGS="$INSTALLER_TMPBIN/java.args"
-    export INSTALLER_TEST_RODIN_TARBALL="$INSTALLER_TMPBIN/rodin-fixture.tar.gz"
-    export INSTALLER_TEST_PROB_TARBALL="$INSTALLER_TMPBIN/prob-fixture.tar.gz"
-    make_rodin_fixture_tarball "$INSTALLER_TEST_RODIN_TARBALL"
-    make_prob_fixture_tarball "$INSTALLER_TEST_PROB_TARBALL"
-    make_installer_stubs "$INSTALLER_TMPBIN"
+    : > "$INSTALLER_TEST_CURL_LOG"
+    : > "$INSTALLER_TEST_JAVA_ARGS"
 }
 
 run_installer() {

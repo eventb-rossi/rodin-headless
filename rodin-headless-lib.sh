@@ -6,6 +6,25 @@ default_rodin_prefix() {
     printf '%s\n' "${RODIN_PREFIX:-${HOME:-}/.local/share/rodin-headless}"
 }
 
+# JDK 23+ ships restrictive JAXP defaults that choke on the large
+# entities in Eclipse XML (update-site metadata, registries); 0 means
+# unlimited, and the properties are recognized since JDK 8. Spliced
+# into every equinox JVM launch (p2 director and the build engine).
+JDK_XML_RELAXED_OPTS=(
+    -Djdk.xml.maxGeneralEntitySizeLimit=0
+    -Djdk.xml.totalEntitySizeLimit=0
+)
+
+# Resolve the de.prob.core plugin directory under a Rodin install;
+# prints nothing when the plugin (or the install) is absent. The single
+# definition of "this install can run the headless builder" — used by
+# the wrapper's auto-detection, the engine's precheck, and the
+# installer's idempotency check.
+find_prob_plugin() {
+    [ -d "$1/plugins" ] || return 0
+    resolve_latest_dir "$1/plugins" de.prob.core
+}
+
 find_archive_project_root() {
     local archive_root="$1"
 

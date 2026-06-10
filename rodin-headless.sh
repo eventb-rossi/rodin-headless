@@ -51,9 +51,9 @@ fi
 WORKSPACE=""
 PLUGIN_DIR=""
 cleanup() {
-    if [ -n "$WORKSPACE" ] || [ -n "$PLUGIN_DIR" ]; then
-        rm -rf ${WORKSPACE:+"$WORKSPACE"} ${PLUGIN_DIR:+"$PLUGIN_DIR"}
-    fi
+    # rm -f treats empty operands as already-removed, so the not-yet-set
+    # case needs no guard.
+    rm -rf "$WORKSPACE" "$PLUGIN_DIR"
     if [ -n "${LOCK_FD:-}" ]; then
         rm -f "$RODIN_PLUGINS/$BUNDLE_JAR_NAME"
         if [ -f "$BUNDLES_INFO" ]; then
@@ -120,8 +120,10 @@ RODIN_PLUGINS="$RODIN_DIR/plugins"
 
 # The builder plugin compiles against de.prob.core in every mode; fail
 # early with a hint instead of dying later in the classpath setup when
-# pointed at a bare Rodin install.
-if [ ! -d "$RODIN_PLUGINS" ] || [ -z "$(resolve_latest_dir "$RODIN_PLUGINS" de.prob.core)" ]; then
+# pointed at a bare Rodin install. The resolved directory is reused for
+# the compile classpath in step 2.
+PROB_CORE_DIR="$(find_prob_plugin "$RODIN_DIR")"
+if [ -z "$PROB_CORE_DIR" ]; then
     echo "ERROR: ProB Rodin plugin not installed in $RODIN_DIR" >&2
     echo "Run ./rodin-install.sh to install it" >&2
     exit 1
@@ -467,7 +469,6 @@ CP="$CP:$(resolve_latest_jar "$RODIN_PLUGINS" org.eventb.core)"
 CP="$CP:$(resolve_latest_jar "$RODIN_PLUGINS" org.eventb.core.ast)"
 CP="$CP:$(resolve_latest_jar "$RODIN_PLUGINS" org.rodinp.core)"
 CP="$CP:$(resolve_latest_jar "$RODIN_PLUGINS" org.eventb.core.seqprover)"
-PROB_CORE_DIR=$(resolve_latest_dir "$RODIN_PLUGINS" de.prob.core)
 CP="$CP:$PROB_CORE_DIR"
 # de.prob.core has nested JARs in lib/dependencies/
 for jar in "$PROB_CORE_DIR"/lib/dependencies/*.jar; do
@@ -493,14 +494,10 @@ if [ -f "$BUNDLES_INFO" ]; then
     echo "$BUNDLE_INFO_LINE" >> "$BUNDLES_INFO"
 fi
 
-# Build the Rodin launch command (prefer equinox launcher JAR over native binary).
-# The jdk.xml properties lift JDK 23+ JAXP limits that break Eclipse's
-# XML parsing (same workaround as the p2 director in rodin-install.sh).
+# Build the Rodin launch command (prefer equinox launcher JAR over native binary)
 LAUNCHER_JAR=$(resolve_latest_jar "$RODIN_PLUGINS" org.eclipse.equinox.launcher)
 if [ -n "$LAUNCHER_JAR" ]; then
-    RODIN_CMD=(java "-Drodinbuilder.mode=$BUILD_MODE"
-        -Djdk.xml.maxGeneralEntitySizeLimit=0
-        -Djdk.xml.totalEntitySizeLimit=0
+    RODIN_CMD=(java "-Drodinbuilder.mode=$BUILD_MODE" "${JDK_XML_RELAXED_OPTS[@]}"
         -jar "$LAUNCHER_JAR" -install "$RODIN_DIR")
 else
     RODIN_CMD=("$RODIN_DIR/rodin")

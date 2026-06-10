@@ -2,10 +2,11 @@
 # Resolve Rodin version and Linux tarball name from SourceForge.
 #
 # Usage:
-#   ./rodin-version.sh              # latest stable
-#   ./rodin-version.sh latest       # same
-#   ./rodin-version.sh latest-rc    # latest release candidate
-#   ./rodin-version.sh 3.8          # specific version
+#   ./rodin-version.sh                     # latest stable
+#   ./rodin-version.sh latest              # same
+#   ./rodin-version.sh latest-rc           # latest release candidate
+#   ./rodin-version.sh 3.8                 # specific version
+#   ./rodin-version.sh 3.9 <tarball>       # pinned tarball, no scraping
 #
 # Output (eval-friendly):
 #   export RODIN_VERSION='3.9'
@@ -18,6 +19,7 @@ SF_BASE="https://sourceforge.net/projects/rodin-b-sharp/files/Core_Rodin_Platfor
 SAFE_PATTERN='^[a-zA-Z0-9._-]+$'
 
 MODE="${1:-latest}"
+TARBALL_OVERRIDE="${2:-}"
 
 latest_by_numbers() {
     awk '{ key = $0; gsub(/[^0-9]+/, ".", key); print key "\t" $0 }' \
@@ -53,10 +55,14 @@ if [ -z "$VERSION" ]; then
     exit 1
 fi
 
-# Resolve the Linux x86_64 tarball filename
-listing=$(curl -fsSL --retry 2 --max-time 30 "$SF_BASE/$VERSION/")
-TARBALL=$(printf '%s\n' "$listing" \
-    | grep -Eo 'rodin-[^"]*-linux\.gtk\.x86_64\.tar\.gz' | head -1 || true)
+# Resolve the Linux x86_64 tarball filename (skipped when pinned)
+if [ -n "$TARBALL_OVERRIDE" ]; then
+    TARBALL="$TARBALL_OVERRIDE"
+else
+    listing=$(curl -fsSL --retry 2 --max-time 30 "$SF_BASE/$VERSION/")
+    TARBALL=$(printf '%s\n' "$listing" \
+        | grep -Eo 'rodin-[^"]*-linux\.gtk\.x86_64\.tar\.gz' | head -1 || true)
+fi
 
 if [ -z "$TARBALL" ]; then
     echo "ERROR: Could not find Linux tarball for Rodin $VERSION" >&2

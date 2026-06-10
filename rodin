@@ -40,8 +40,7 @@ find_native_rodin() {
     # install must not shadow a working container fallback.
     local default_dir
     default_dir="$(default_rodin_prefix)/rodin"
-    if [ -f "$default_dir/rodin.ini" ] \
-        && compgen -G "$default_dir/plugins/de.prob.core_*" >/dev/null; then
+    if [ -f "$default_dir/rodin.ini" ] && [ -n "$(find_prob_plugin "$default_dir")" ]; then
         printf '%s\n' "$default_dir"
         return 0
     fi
@@ -65,6 +64,7 @@ run_native() {
 
 RODIN_RUNTIME="${RODIN_RUNTIME:-auto}"
 
+RUNTIME=""
 case "$RODIN_RUNTIME" in
     auto|native)
         if NATIVE_RODIN_DIR="$(find_native_rodin)"; then
@@ -76,27 +76,29 @@ case "$RODIN_RUNTIME" in
             exit 1
         fi
         ;;
-    docker|podman) ;;
+    docker|podman)
+        if ! command -v "$RODIN_RUNTIME" >/dev/null 2>&1; then
+            echo "Error: RODIN_RUNTIME=$RODIN_RUNTIME but $RODIN_RUNTIME is not installed" >&2
+            exit 1
+        fi
+        RUNTIME="$RODIN_RUNTIME"
+        ;;
     *)
         echo "Error: RODIN_RUNTIME must be auto, native, docker, or podman (got '$RODIN_RUNTIME')" >&2
         exit 1
         ;;
 esac
 
-# Detect container runtime
-if [ "$RODIN_RUNTIME" = docker ] || [ "$RODIN_RUNTIME" = podman ]; then
-    if ! command -v "$RODIN_RUNTIME" >/dev/null 2>&1; then
-        echo "Error: RODIN_RUNTIME=$RODIN_RUNTIME but $RODIN_RUNTIME is not installed" >&2
+# Detect container runtime (auto mode falls through to here)
+if [ -z "$RUNTIME" ]; then
+    if command -v docker >/dev/null 2>&1; then
+        RUNTIME=docker
+    elif command -v podman >/dev/null 2>&1; then
+        RUNTIME=podman
+    else
+        echo "Error: docker or podman required (or run ./rodin-install.sh for a native install)" >&2
         exit 1
     fi
-    RUNTIME="$RODIN_RUNTIME"
-elif command -v docker >/dev/null 2>&1; then
-    RUNTIME=docker
-elif command -v podman >/dev/null 2>&1; then
-    RUNTIME=podman
-else
-    echo "Error: docker or podman required (or run ./rodin-install.sh for a native install)" >&2
-    exit 1
 fi
 
 # Rodin and ProB only publish Linux x86_64 artifacts for the container path.

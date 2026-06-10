@@ -3,22 +3,7 @@
 #
 # Works natively on Linux x86_64 and inside the Docker image build —
 # the Dockerfile calls this same script, so install logic lives in one place.
-#
-# Usage:
-#   ./rodin-install.sh [options]
-#
-# Options:
-#   --prefix DIR       Install prefix (default: $RODIN_PREFIX or
-#                      ~/.local/share/rodin-headless). Layout:
-#                        <prefix>/rodin  — Rodin IDE (use as RODIN_DIR)
-#                        <prefix>/prob   — ProB CLI (contains probcli)
-#   --only rodin|prob  Run a single install phase
-#   --force            Reinstall even if already present
-#   --rodin-version V  "latest" (default), "latest-rc", or e.g. "3.9"
-#   --rodin-tarball F  Pin the exact tarball filename (skips detection;
-#                      requires --rodin-version to be a specific version)
-#   --prob-version V   "latest" (default) or e.g. "1.15.1"
-#   --check-deps       Report status of system dependencies and exit
+# Run with --help for the option list.
 #
 # Examples:
 #   ./rodin-install.sh                         # full install to ~/.local/share
@@ -45,7 +30,9 @@ Usage: ./rodin-install.sh [options]
 
 Options:
   --prefix DIR       Install prefix (default: $RODIN_PREFIX or
-                     ~/.local/share/rodin-headless)
+                     ~/.local/share/rodin-headless). Layout:
+                       <prefix>/rodin  — Rodin IDE (use as RODIN_DIR)
+                       <prefix>/prob   — ProB CLI (contains probcli)
   --only rodin|prob  Run a single install phase
   --force            Reinstall even if already present
   --rodin-version V  "latest" (default), "latest-rc", or e.g. "3.9"
@@ -82,12 +69,14 @@ case "$ONLY" in
         ;;
 esac
 
-case "$RODIN_TARBALL_ARG:$RODIN_VERSION_ARG" in
-    ?*:latest|?*:latest-rc)
-        echo "ERROR: --rodin-tarball requires a specific --rodin-version (the version is part of the download URL)" >&2
-        exit 1
-        ;;
-esac
+if [ -n "$RODIN_TARBALL_ARG" ]; then
+    case "$RODIN_VERSION_ARG" in
+        latest|latest-rc)
+            echo "ERROR: --rodin-tarball requires a specific --rodin-version (the version is part of the download URL)" >&2
+            exit 1
+            ;;
+    esac
+fi
 
 RODIN_INSTALL_DIR="$PREFIX/rodin"
 PROB_INSTALL_DIR="$PREFIX/prob"
@@ -135,11 +124,11 @@ check_dep() {
         printf 'ok       %s\n' "$name"
         return 0
     fi
-    case "$kind" in
-        required) printf 'MISSING  %s — %s\n' "$name" "$hint" ;;
-        optional) printf 'missing  %s (optional) — %s\n' "$name" "$hint" ;;
-    esac
-    [ "$kind" != required ]
+    if [ "$kind" = required ]; then
+        printf 'MISSING  %s — %s\n' "$name" "$hint"
+        return 1
+    fi
+    printf 'missing  %s (optional) — %s\n' "$name" "$hint"
 }
 
 # Returns 0 if GTK3 is present, 1 if absent, 2 if undeterminable.
@@ -249,14 +238,9 @@ install_rodin() {
     refuse_foreign_dir "$RODIN_INSTALL_DIR" rodin.ini
 
     local rodin_env staging java_bin_dir
-    if [ -n "$RODIN_TARBALL_ARG" ]; then
-        RODIN_VERSION="$RODIN_VERSION_ARG"
-        RODIN_TARBALL="$RODIN_TARBALL_ARG"
-        RODIN_URL="https://sourceforge.net/projects/rodin-b-sharp/files/Core_Rodin_Platform/${RODIN_VERSION}/${RODIN_TARBALL}/download"
-    else
-        rodin_env="$("$SCRIPT_DIR/rodin-version.sh" "$RODIN_VERSION_ARG")"
-        eval "$rodin_env"
-    fi
+    rodin_env="$("$SCRIPT_DIR/rodin-version.sh" "$RODIN_VERSION_ARG" \
+        ${RODIN_TARBALL_ARG:+"$RODIN_TARBALL_ARG"})"
+    eval "$rodin_env"
 
     echo "Installing Rodin $RODIN_VERSION: $RODIN_TARBALL"
     mkdir -p "$PREFIX"
@@ -289,7 +273,7 @@ FEATURE_IUS="org.eventb.smt.feature.group,com.clearsy.atelierb.provers.feature.g
 # One marker plugin per installed feature family; all present means the
 # director run completed, so an interrupted install is retried.
 plugins_complete() {
-    [ -n "$(resolve_latest_dir "$RODIN_INSTALL_DIR/plugins" de.prob.core)" ] \
+    [ -n "$(find_prob_plugin "$RODIN_INSTALL_DIR")" ] \
         && [ -n "$(resolve_latest_jar "$RODIN_INSTALL_DIR/plugins" org.eventb.smt.core)" ] \
         && [ -n "$(resolve_latest_jar "$RODIN_INSTALL_DIR/plugins" com.clearsy.atelierb.provers.core)" ]
 }
@@ -297,11 +281,7 @@ plugins_complete() {
 run_p2_director() {
     local launcher_jar="$1"
     shift
-    # JDK 23+ ships restrictive JAXP defaults that choke on the large
-    # entities in Eclipse update-site metadata; lift the limits for the
-    # director run (0 = unlimited).
-    java -Djdk.xml.maxGeneralEntitySizeLimit=0 \
-        -Djdk.xml.totalEntitySizeLimit=0 \
+    java "${JDK_XML_RELAXED_OPTS[@]}" \
         -jar "$launcher_jar" \
         -nosplash \
         -application org.eclipse.equinox.p2.director \
@@ -332,11 +312,7 @@ install_prob() {
         echo "ProB CLI installed at $PROB_INSTALL_DIR"
     fi
 
-    local plugins_present=0
-    if [ -n "$(resolve_latest_dir "$RODIN_INSTALL_DIR/plugins" de.prob.core)" ]; then
-        plugins_present=1
-    fi
-    if [ "$plugins_present" -eq 1 ] && [ "$FORCE" -eq 0 ] && plugins_complete; then
+    if [ "$FORCE" -eq 0 ] && plugins_complete; then
         echo "ProB Rodin plugins already installed in $RODIN_INSTALL_DIR (use --force to reinstall)"
         return 0
     fi
@@ -361,7 +337,7 @@ install_prob() {
 
     # The director cannot install IUs over themselves; on --force (or a
     # partial previous run) remove what is there first, best-effort.
-    if [ "$plugins_present" -eq 1 ]; then
+    if [ -n "$(find_prob_plugin "$RODIN_INSTALL_DIR")" ]; then
         run_p2_director "$launcher_jar" -uninstallIU "$FEATURE_IUS" || true
     fi
 
@@ -381,7 +357,7 @@ case "$ONLY" in
     "")    install_rodin; install_prob ;;
 esac
 
-if [ -z "$ONLY" ] || [ "$ONLY" = "prob" ]; then
+if [ "$ONLY" != rodin ]; then
     echo
     echo "Done. Next steps:"
     echo "  ./rodin build model.zip                # wrapper auto-detects this install"

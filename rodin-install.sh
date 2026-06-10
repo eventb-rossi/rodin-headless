@@ -253,7 +253,12 @@ install_prob() {
         exit 1
     fi
 
-    java -jar "$launcher_jar" \
+    # JDK 23+ ships restrictive JAXP defaults that choke on the large
+    # entities in Eclipse update-site metadata; lift the limits for the
+    # director run (0 = unlimited).
+    java -Djdk.xml.maxGeneralEntitySizeLimit=0 \
+        -Djdk.xml.totalEntitySizeLimit=0 \
+        -jar "$launcher_jar" \
         -nosplash \
         -application org.eclipse.equinox.p2.director \
         -repository "https://rodin-b-sharp.sourceforge.net/updates/,https://www.atelierb.eu/update_site/atelierb_provers,https://stups.hhu-hosting.de/rodin/prob1/release/,https://download.eclipse.org/releases/$eclipse_release/" \

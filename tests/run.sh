@@ -852,6 +852,8 @@ test_installer_prob_phase_runs_p2_director() {
     args="$(cat "$java_args")"
     assert_contains "$args" "<org.eclipse.equinox.p2.director>" \
         "prob phase should run the p2 director"
+    assert_contains "$args" "<-Djdk.xml.maxGeneralEntitySizeLimit=0>" \
+        "prob phase should lift the JDK 23+ JAXP entity limits for the director"
     assert_contains "$args" "org.eclipse.equinox.launcher_1.6.400.jar" \
         "prob phase should launch the resolved equinox launcher"
     assert_contains "$args" "releases/2024-12" \

@@ -181,9 +181,11 @@ BUNDLE_INFO_LINE="$BUNDLE_SYMBOLIC_NAME,$BUNDLE_VERSION,file:$PLUGIN_DIR/$BUNDLE
 APPLICATION_ID="$BUNDLE_SYMBOLIC_NAME.headlessBuilder"
 RODIN_BUILD_TIMEOUT="${RODIN_BUILD_TIMEOUT:-60m}"
 RODIN_BUILD_TIMEOUT_KILL_AFTER="${RODIN_BUILD_TIMEOUT_KILL_AFTER:-30s}"
-# Workspace project name per archive, index-parallel to ZIPS — bash 3.2
-# (stock macOS) has no associative arrays.
+# Workspace project name and archive-relative project root per
+# archive, index-parallel to ZIPS — bash 3.2 (stock macOS) has no
+# associative arrays.
 ZIP_PROJECTS=()
+ZIP_ROOTS=()
 
 echo "Workspace: $WORKSPACE"
 echo "Processing ${#ZIPS[@]} archives"
@@ -199,15 +201,16 @@ for zip_index in "${!ZIPS[@]}"; do
     unzip -q "$MODELS_DIR/$zip" -d "$tmpdir"
 
     # One walk serves both the root count and the source directory.
-    # Extracting the first *project* root (same sort order step 4's
-    # repackaging uses) keeps extraction and write-back pointed at the
-    # same directory, and skips non-project clutter (docs/, media/)
-    # that a first-top-level-dir heuristic could pick up instead of
-    # the model. BSD wc pads the count with leading spaces.
+    # Extracting the first project root keeps extraction and step 4's
+    # write-back pointed at the same directory, and skips non-project
+    # clutter (docs/, media/) that a first-top-level-dir heuristic
+    # could pick up instead of the model. First line and line count
+    # via parameter expansion — no extra processes per archive.
     archive_roots=$(find_archive_project_roots "$tmpdir")
     if [ -n "$archive_roots" ]; then
-        project_roots=$(printf '%s\n' "$archive_roots" | wc -l | tr -d ' ')
-        srcdir=$(printf '%s\n' "$archive_roots" | head -1)
+        newlines=${archive_roots//[!$'\n']/}
+        project_roots=$(( ${#newlines} + 1 ))
+        srcdir=${archive_roots%%$'\n'*}
     else
         # No Event-B sources or .project anywhere: keep the legacy
         # top-level-directory fallback so the failure surfaces later
@@ -263,6 +266,15 @@ for zip_index in "${!ZIPS[@]}"; do
 EOF
     fi
     ZIP_PROJECTS[zip_index]="$projname"
+    # Step 4 re-extracts the same zip, so the project root found here
+    # is valid there as a relative path ("." for the archive root;
+    # empty = no project roots, step 4 skips the archive). Saves a
+    # second full-tree find per archive.
+    if [ "$project_roots" -gt 0 ]; then
+        ZIP_ROOTS[zip_index]=".${srcdir#"$tmpdir"}"
+    else
+        ZIP_ROOTS[zip_index]=""
+    fi
     echo "  $m → $projname"
     # One project per archive: extraction keeps a single project root
     # and repackaging writes a single one back, so extra projects would
@@ -699,12 +711,13 @@ for zip_index in "${!ZIPS[@]}"; do
     tmpdir=$(mktemp -d)
     unzip -q "$MODELS_DIR/$zip" -d "$tmpdir"
 
-    # Find the project root inside the zip from Event-B sources or .project metadata.
-    bumdir=$(find_archive_project_root "$tmpdir")
-    if [ -z "$bumdir" ]; then
+    # The project root was located during extraction; the re-extracted
+    # tree is identical, so the stored relative path points at it.
+    if [ -z "${ZIP_ROOTS[$zip_index]:-}" ]; then
         rm -rf "$tmpdir"
         continue
     fi
+    bumdir="$tmpdir/${ZIP_ROOTS[$zip_index]}"
 
     projdir=""
     if [ -n "${ZIP_PROJECTS[$zip_index]:-}" ]; then

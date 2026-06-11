@@ -464,6 +464,42 @@ test_rodin_runtime_docker_overrides_native() {
         "container dispatch should use the rodin-headless image"
 }
 
+test_default_rodin_prefix_requires_home_or_rodin_prefix() {
+    assert_fails_with "set RODIN_PREFIX or HOME" \
+        env RODIN_PREFIX= HOME= \
+            bash -c ". '$ROOT_DIR/rodin-headless-lib.sh'; default_rodin_prefix"
+
+    assert_eq "/custom/prefix" \
+        "$(RODIN_PREFIX=/custom/prefix HOME='' lib_call default_rodin_prefix)" \
+        "an explicit RODIN_PREFIX should not need HOME"
+    assert_eq "/home/u/.local/share/rodin-headless" \
+        "$(RODIN_PREFIX='' HOME=/home/u lib_call default_rodin_prefix)" \
+        "the default prefix should live under HOME"
+}
+
+test_rodin_wrapper_survives_underivable_prefix() {
+    local tmpbin args_file args output
+    tmpbin="$(new_tmpdir)"
+    args_file="$tmpbin/docker.args"
+
+    make_docker_args_stub "$tmpbin"
+
+    # No RODIN_PREFIX and no HOME: native detection must quietly find
+    # nothing and hand over to the container runtime.
+    output="$(
+        RODIN_TEST_ARGS="$args_file" \
+        RODIN_DIR="" RODIN_PREFIX="" HOME="" \
+        PATH="$tmpbin:$PATH" \
+            "$ROOT_DIR/rodin" build model.zip 2>&1
+    )"
+
+    args="$(cat "$args_file")"
+    assert_contains "$args" "<run>" \
+        "an underivable prefix should fall back to the container runtime"
+    assert_not_contains "$output" "ERROR" \
+        "the wrapper's detect side should not surface the prefix error"
+}
+
 test_rodin_headless_rejects_missing_archives() {
     local tmpdir rodin_dir models_dir
     tmpdir="$(new_tmpdir)"
@@ -1142,6 +1178,21 @@ install_darwin_rodin_fixture() {
             --rodin-tarball rodin-3.10.0-RC2-macosx.cocoa.aarch64.tar.gz "$@"
 }
 
+test_installer_check_deps_works_without_home() {
+    local output
+
+    # Purely diagnostic: must report even where the default prefix is
+    # underivable, with only the probcli line degraded.
+    set +e
+    output="$(HOME='' RODIN_PREFIX='' "$ROOT_DIR/rodin-install.sh" --check-deps 2>&1)"
+    set -e
+
+    assert_contains "$output" "Runtime dependencies" \
+        "check-deps should print the report when the prefix is underivable"
+    assert_contains "$output" "set RODIN_PREFIX or HOME to locate an install" \
+        "check-deps should degrade the probcli line, not die"
+}
+
 test_installer_check_deps_reports_missing_tools() {
     local minbin output status
     minbin="$(new_tmpdir)"
@@ -1370,6 +1421,8 @@ main() {
     test_rodin_wrapper_prefers_native_install
     test_rodin_wrapper_detects_mac_app_bundle_install
     test_rodin_runtime_docker_overrides_native
+    test_default_rodin_prefix_requires_home_or_rodin_prefix
+    test_rodin_wrapper_survives_underivable_prefix
     test_rodin_headless_rejects_missing_archives
     test_rodin_headless_requires_prob_plugin
     test_resolve_rodin_home_handles_layouts
@@ -1394,6 +1447,7 @@ main() {
     test_resolve_latest_plugin_paths_use_version_sorting
     test_prob_core_dependency_glob_uses_resolved_directory
     test_validate_deadlock_check_uses_eventb_true_ast
+    test_installer_check_deps_works_without_home
     test_installer_check_deps_reports_missing_tools
     test_installer_rejects_tarball_without_version
     test_installer_installs_rodin_phase

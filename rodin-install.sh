@@ -18,7 +18,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=rodin-headless-lib.sh
 . "$SCRIPT_DIR/rodin-headless-lib.sh"
 
-PREFIX="$(default_rodin_prefix)"
+# Resolved after option parsing: the default needs RODIN_PREFIX or
+# HOME, and an explicit --prefix must work without either.
+PREFIX=""
 ONLY=""
 FORCE=0
 RODIN_VERSION_ARG="latest"
@@ -62,6 +64,16 @@ while [ $# -gt 0 ]; do
             ;;
     esac
 done
+
+if [ -z "$PREFIX" ]; then
+    if ! PREFIX="$(default_rodin_prefix)"; then
+        # --check-deps is purely diagnostic and must keep working where
+        # the default prefix is underivable (no HOME: cron, CI, su) —
+        # it only uses the prefix for the advisory probcli line.
+        [ "$CHECK_DEPS" -eq 1 ] || exit 1
+        PREFIX=""
+    fi
+fi
 
 case "$ONLY" in
     ""|rodin|prob) ;;
@@ -207,7 +219,9 @@ check_deps_report() {
     check_dep optional z3 "extra SMT solver for probcli (apt/dnf: z3)"
     check_dep optional cvc5 "extra SMT solver for probcli (apt: cvc5)"
 
-    if [ -x "$PROB_INSTALL_DIR/probcli" ]; then
+    if [ -z "$PREFIX" ]; then
+        printf 'unknown  probcli — set RODIN_PREFIX or HOME to locate an install\n'
+    elif [ -x "$PROB_INSTALL_DIR/probcli" ]; then
         printf 'ok       probcli (%s)\n' "$PROB_INSTALL_DIR/probcli"
     else
         printf 'missing  probcli — not installed under %s (run %s --only prob)\n' \

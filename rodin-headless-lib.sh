@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
 
 # Single definition of the native install location, shared by the
-# installer (write side) and the rodin wrapper (detect side).
+# installer (write side) and the rodin wrapper (detect side). With
+# neither RODIN_PREFIX nor HOME set (cron, launchd, su, some CI), there
+# is no sane default — fail instead of fabricating an unwritable
+# /-rooted path.
 default_rodin_prefix() {
-    printf '%s\n' "${RODIN_PREFIX:-${HOME:-}/.local/share/rodin-headless}"
+    if [ -z "${RODIN_PREFIX:-}" ] && [ -z "${HOME:-}" ]; then
+        echo "ERROR: cannot derive the rodin-headless prefix: set RODIN_PREFIX or HOME" >&2
+        return 1
+    fi
+    printf '%s\n' "${RODIN_PREFIX:-$HOME/.local/share/rodin-headless}"
 }
 
 # JDK 23+ ships restrictive JAXP defaults that choke on the large

@@ -37,9 +37,11 @@ find_native_rodin() {
     fi
     # Only auto-select a default-prefix install that is complete (the
     # engine needs de.prob.core even for plain builds) — a half-finished
-    # install must not shadow a working container fallback.
+    # install must not shadow a working container fallback. An
+    # underivable prefix (no RODIN_PREFIX, no HOME) just means "no
+    # native install" on the detect side, so the error is silenced.
     local default_dir
-    default_dir="$(default_rodin_prefix)/rodin"
+    default_dir="$(default_rodin_prefix 2>/dev/null)/rodin" || return 1
     if resolve_rodin_home "$default_dir" >/dev/null && [ -n "$(find_prob_plugin "$default_dir")" ]; then
         printf '%s\n' "$default_dir"
         return 0

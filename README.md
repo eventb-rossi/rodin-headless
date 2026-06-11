@@ -166,6 +166,14 @@ The Dockerfile is a thin layer: it installs the system packages (GTK3/X11, Xvfb,
 | Atelier B provers | 2.4.1 (PP, ML) |
 | Image size | ~1.3 GB |
 
+Images built from `latest` stay auditable after the fact: the requested versions (and any pinned tarball) are recorded as image labels, and the installer writes the **resolved** versions (including the exact Rodin tarball) into a manifest inside the image — labels are advisory, the manifest is canonical. A native install gets the same manifest under its prefix:
+
+```bash
+docker image inspect --format '{{json .Config.Labels}}' rodin-headless
+docker run --rm --entrypoint cat rodin-headless /opt/.rodin-headless-versions
+cat ~/.local/share/rodin-headless/.rodin-headless-versions   # native install
+```
+
 ### Rodin Version Selection
 
 By default the latest stable Rodin version published on SourceForge is auto-detected. The installer flags and their `docker build` equivalents:

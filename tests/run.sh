@@ -1634,6 +1634,27 @@ test_installer_darwin_prob_phase_unpacks_flat_zip() {
         "darwin prob phase should aim the p2 director at the bundle's Eclipse root"
 }
 
+test_installer_records_resolved_versions() {
+    setup_installer_fixture
+
+    install_rodin_fixture > /dev/null
+    assert_contains "$(cat "$INSTALLER_PREFIX/.rodin-headless-versions")" \
+        "rodin=3.9" \
+        "the rodin phase should record its resolved version"
+    assert_contains "$(cat "$INSTALLER_PREFIX/.rodin-headless-versions")" \
+        "rodin-tarball=rodin-3.9-linux.gtk.x86_64.tar.gz" \
+        "the rodin phase should record the exact tarball"
+
+    run_installer --prefix "$INSTALLER_PREFIX" --only prob --prob-version 1.15.1 \
+        > /dev/null
+    local manifest
+    manifest="$(cat "$INSTALLER_PREFIX/.rodin-headless-versions")"
+    assert_contains "$manifest" "rodin=3.9" \
+        "the prob phase should preserve the rodin entry"
+    assert_contains "$manifest" "prob=1.15.1" \
+        "the prob phase should record its resolved version"
+}
+
 test_dockerfile_installs_headless_helper() {
     local dockerfile
     dockerfile="$(cat "$ROOT_DIR/Dockerfile")"
@@ -1661,6 +1682,12 @@ test_dockerfile_installs_headless_helper() {
         "Dockerfile should forward the ProB version build argument"
     assert_contains "$dockerfile" "ln -s /opt/prob/probcli /usr/local/bin/probcli" \
         "Dockerfile should expose probcli on the container PATH"
+    assert_contains "$dockerfile" 'LABEL rodin.version.requested="$RODIN_VERSION"' \
+        "Dockerfile should label the requested Rodin version"
+    assert_contains "$dockerfile" 'rodin.tarball.requested="$RODIN_TARBALL"' \
+        "Dockerfile should label any pinned tarball"
+    assert_contains "$dockerfile" 'prob.version.requested="$PROB_VERSION"' \
+        "Dockerfile should label the requested ProB version"
 }
 
 main() {
@@ -1724,6 +1751,7 @@ main() {
     test_installer_plugin_completeness_and_force
     test_installer_darwin_installs_rodin_app_bundle
     test_installer_darwin_prob_phase_unpacks_flat_zip
+    test_installer_records_resolved_versions
     test_dockerfile_installs_headless_helper
     printf 'PASS: %s\n' "tests/run.sh"
 }

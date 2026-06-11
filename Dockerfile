@@ -72,3 +72,12 @@ ENV MODELS_DIR=/models
 
 WORKDIR /models
 ENTRYPOINT ["entrypoint.sh"]
+
+# Requested versions, knowable at build time; the installer records the
+# resolved ones in /opt/.rodin-headless-versions inside the image.
+# Last on purpose: a LABEL consuming these ARGs any earlier would
+# invalidate the cached install layers on every version-arg change
+# (LABEL position does not affect image metadata).
+LABEL rodin.version.requested="$RODIN_VERSION" \
+      rodin.tarball.requested="$RODIN_TARBALL" \
+      prob.version.requested="$PROB_VERSION"

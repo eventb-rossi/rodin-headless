@@ -133,6 +133,21 @@ fetch_and_unpack() {
     rm -f "$archive"
 }
 
+# Resolved-version manifest: one key=value per component, merged across
+# phases, so a prefix (or image) built from "latest" stays auditable
+# after the fact.
+record_installed_version() {
+    local key="$1" value="$2" manifest tmp
+
+    manifest="$PREFIX/.rodin-headless-versions"
+    tmp="$(mktemp)"
+    if [ -f "$manifest" ]; then
+        grep -v "^$key=" "$manifest" > "$tmp" || true
+    fi
+    printf '%s=%s\n' "$key" "$value" >> "$tmp"
+    mv "$tmp" "$manifest"
+}
+
 # Refuse to touch a non-empty target directory that doesn't carry the
 # expected marker file — it is probably not ours to delete.
 refuse_foreign_dir() {
@@ -320,6 +335,8 @@ install_rodin() {
 
     rm -rf "$RODIN_INSTALL_DIR"
     mv "$staging" "$RODIN_INSTALL_DIR"
+    record_installed_version rodin "$RODIN_VERSION"
+    record_installed_version rodin-tarball "$RODIN_TARBALL"
 
     echo "Rodin $RODIN_VERSION installed at $RODIN_INSTALL_DIR"
 }
@@ -372,6 +389,7 @@ install_prob() {
         fetch_and_unpack "$PROB_URL" "$staging"
         rm -rf "$PROB_INSTALL_DIR"
         mv "$staging" "$PROB_INSTALL_DIR"
+        record_installed_version prob "$PROB_VERSION"
         echo "ProB CLI installed at $PROB_INSTALL_DIR"
     fi
 

@@ -262,7 +262,7 @@ for zip_index in "${!ZIPS[@]}"; do
 </projectDescription>
 EOF
     fi
-    ZIP_PROJECTS[$zip_index]="$projname"
+    ZIP_PROJECTS[zip_index]="$projname"
     echo "  $m → $projname"
     # One project per archive: extraction keeps a single project root
     # and repackaging writes a single one back, so extra projects would

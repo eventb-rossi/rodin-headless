@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 
+# Two suite-wide patterns are deliberate and excluded from shellcheck:
+# content tests assert literal script fragments (single-quoted $,
+# SC2016), and stub-based tests rebuild PATH inside subshells so the
+# stubs never leak (SC2030/SC2031).
+# shellcheck disable=SC2016,SC2030,SC2031
+
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -1542,7 +1548,7 @@ install_darwin_rodin_fixture() {
     INSTALLER_TEST_RODIN_TARBALL="$INSTALLER_TEST_RODIN_MAC_TARBALL" \
         run_installer --prefix "$INSTALLER_PREFIX" --only rodin \
             --rodin-version 3.10-RC2 \
-            --rodin-tarball rodin-3.10.0-RC2-macosx.cocoa.aarch64.tar.gz "$@"
+            --rodin-tarball rodin-3.10.0-RC2-macosx.cocoa.aarch64.tar.gz
 }
 
 test_installer_check_deps_works_without_home() {

@@ -17,6 +17,7 @@ default_rodin_prefix() {
 # entities in Eclipse XML (update-site metadata, registries); 0 means
 # unlimited, and the properties are recognized since JDK 8. Spliced
 # into every equinox JVM launch (p2 director and the build engine).
+# shellcheck disable=SC2034  # consumed by the scripts sourcing this lib
 JDK_XML_RELAXED_OPTS=(
     -Djdk.xml.maxGeneralEntitySizeLimit=0
     -Djdk.xml.totalEntitySizeLimit=0

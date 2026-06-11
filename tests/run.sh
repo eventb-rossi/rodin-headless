@@ -93,27 +93,67 @@ EOF
     done
 }
 
-# Stub docker so `image inspect` reports an existing amd64 image and any
-# other invocation records its args to $RODIN_TEST_ARGS.
-make_docker_args_stub() {
-    local tmpbin="$1"
+# Stub a container engine binary: `image inspect` reports an existing
+# amd64 image, `info` answers the rootless probe from
+# RODIN_TEST_ROOTLESS (default rootful), podman's `machine inspect`
+# answers the mount pre-flight from RODIN_TEST_MACHINE_CONFIG /
+# RODIN_TEST_MOUNTS, and any other invocation records its args to
+# $RODIN_TEST_ARGS.
+make_engine_args_stub() {
+    local tmpbin="$1" engine="$2"
 
-    cat > "$tmpbin/docker" <<'EOF'
+    cat > "$tmpbin/$engine" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
-case "$1 $2" in
+case "$1 ${2:-}" in
     "image inspect")
         if [ "${3:-}" = "--format" ]; then
             printf '%s\n' amd64
         fi
         exit 0
         ;;
+    "machine inspect")
+        case "${4:-}" in
+            *ConfigDir*)
+                printf '%s\n' "${RODIN_TEST_MACHINE_CONFIG:-}"
+                ;;
+            *.Mounts*)
+                [ -n "${RODIN_TEST_MOUNTS:-}" ] || exit 125
+                printf '%s\n' "$RODIN_TEST_MOUNTS"
+                ;;
+        esac
+        exit 0
+        ;;
+esac
+
+case "$1" in
+    info)
+        # docker asks for SecurityOptions, podman for Host.Security.Rootless
+        case "${3:-}" in
+            *Rootless*)
+                printf '%s\n' "${RODIN_TEST_ROOTLESS:-false}"
+                ;;
+            *)
+                if [ "${RODIN_TEST_ROOTLESS:-false}" = true ]; then
+                    printf '[name=rootless name=seccomp]\n'
+                else
+                    printf '[name=seccomp,profile=builtin name=cgroupns]\n'
+                fi
+                ;;
+        esac
+        exit 0
+        ;;
 esac
 
 printf '<%s>\n' "$@" > "$RODIN_TEST_ARGS"
 EOF
-    chmod +x "$tmpbin/docker"
+    chmod +x "$tmpbin/$engine"
+}
+
+# Most tests exercise the docker path.
+make_docker_args_stub() {
+    make_engine_args_stub "$1" docker
 }
 
 # Stub docker so `image inspect` reports no image and build/run record
@@ -132,6 +172,11 @@ case "$1 $2" in
 esac
 
 case "$1" in
+    info)
+        # A rootful daemon: SecurityOptions without name=rootless
+        printf '[name=seccomp,profile=builtin name=cgroupns]\n'
+        exit 0
+        ;;
     build)
         printf '<%s>\n' "$@" > "$RODIN_TEST_BUILD_ARGS"
         exit 0
@@ -181,6 +226,25 @@ case "\${1:-}" in
 esac
 EOF
     chmod +x "$tmpbin/launchctl"
+}
+
+# Fixture the engine accepts: a fake install carrying the ProB plugin
+# marker plus an empty models dir. Paths land in $rodin_dir /
+# $models_dir via dynamic scoping (callers declare them local).
+setup_engine_fixture() {
+    local fixture_dir
+    fixture_dir="$(new_tmpdir)"
+    rodin_dir="$fixture_dir/rodin"
+    models_dir="$fixture_dir/models"
+    mkdir -p "$rodin_dir/plugins/de.prob.core_1.0.0" "$models_dir"
+}
+
+# Run the engine against the fixture dirs; extra args pass through.
+# The GUI probe is skipped so results match on GUI-less hosts.
+run_engine() {
+    env DISPLAY=:0 RODIN_SKIP_GUI_CHECK=1 \
+        RODIN_DIR="$rodin_dir" MODELS_DIR="$models_dir" \
+        "$ROOT_DIR/rodin-headless.sh" "$@"
 }
 
 test_rodin_help_skips_runtime() {
@@ -532,12 +596,9 @@ test_rodin_wrapper_falls_back_without_gui_session() {
 }
 
 test_rodin_headless_fast_fails_without_gui_session() {
-    local tmpbin tmpdir rodin_dir models_dir
+    local tmpbin rodin_dir models_dir
     tmpbin="$(new_tmpdir)"
-    tmpdir="$(new_tmpdir)"
-    rodin_dir="$tmpdir/rodin"
-    models_dir="$tmpdir/models"
-    mkdir -p "$rodin_dir/plugins/de.prob.core_1.0.0" "$models_dir"
+    setup_engine_fixture
     : > "$models_dir/model.zip"
 
     make_uname_stub "$tmpbin" Darwin arm64
@@ -549,64 +610,88 @@ test_rodin_headless_fast_fails_without_gui_session() {
             "$ROOT_DIR/rodin-headless.sh" model.zip
 }
 
+test_rodin_adds_user_mapping_for_rootful_docker() {
+    local tmpbin args_file args
+    tmpbin="$(new_tmpdir)"
+    args_file="$tmpbin/docker.args"
+
+    make_docker_args_stub "$tmpbin"
+
+    RODIN_TEST_ARGS="$args_file" \
+    RODIN_DIR="" \
+    RODIN_PREFIX="$tmpbin" \
+    PATH="$tmpbin:$PATH" \
+        "$ROOT_DIR/rodin" build model.zip
+
+    args="$(cat "$args_file")"
+    assert_contains "$args" "<--user>
+<$(id -u):$(id -g)>" \
+        "rootful docker should run the container as the invoking host user"
+    assert_contains "$args" "<-e>
+<HOME=/tmp>" \
+        "the mapped user needs a writable HOME inside the container"
+}
+
+test_rodin_omits_user_mapping_for_rootless_podman() {
+    local tmpbin args_file args
+    tmpbin="$(new_tmpdir)"
+    args_file="$tmpbin/podman.args"
+
+    # Pin a Linux host so the Darwin-only machine-mount pre-flight
+    # stays out of the way.
+    make_uname_stub "$tmpbin" Linux x86_64
+    make_engine_args_stub "$tmpbin" podman
+
+    RODIN_TEST_ARGS="$args_file" \
+    RODIN_TEST_ROOTLESS=true \
+    RODIN_RUNTIME=podman \
+    RODIN_DIR="" \
+    PATH="$tmpbin:$PATH" \
+        "$ROOT_DIR/rodin" build model.zip
+
+    args="$(cat "$args_file")"
+    assert_contains "$args" "<run>" \
+        "rootless podman should still dispatch the container run"
+    assert_not_contains "$args" "<--user>" \
+        "rootless podman already maps container root to the host user"
+}
+
+# Invoke the wrapper from $models_dir with extra NAME=value pairs in
+# the environment; results land in $wrapper_status / $wrapper_output.
+# Bash's dynamic scoping exposes the calling test's locals.
+run_podman_wrapper() {
+    wrapper_status=0
+    wrapper_output="$(
+        cd "$models_dir" \
+            && env "$@" RODIN_TEST_ARGS="$args_file" \
+                RODIN_RUNTIME=podman RODIN_DIR="" \
+                PATH="$tmpbin:$PATH" "$ROOT_DIR/rodin" build model.zip 2>&1
+    )" || wrapper_status=$?
+}
+
 test_rodin_podman_mac_requires_shared_cwd() {
-    local tmpbin models_dir args_file args output status
+    local tmpbin models_dir models_dir_phys args_file wrapper_status wrapper_output
     tmpbin="$(new_tmpdir)"
     models_dir="$(new_tmpdir)"
+    # The pre-flight compares physical paths (macOS /var is a symlink
+    # into /private), so the shared-mount fixtures must list the
+    # physical location.
+    models_dir_phys="$(cd "$models_dir" && pwd -P)"
     args_file="$tmpbin/podman.args"
 
     make_uname_stub "$tmpbin" Darwin arm64
+    make_engine_args_stub "$tmpbin" podman
 
-    # machine inspect reports $RODIN_TEST_MOUNTS as the shared sources
-    # via the podman 4.x .Mounts template, or — when that is unset, like
-    # podman 5.x — points the config-file fallback at
-    # $RODIN_TEST_MACHINE_CONFIG; image inspect pretends an amd64 image
-    # exists; everything else records its args like the docker stubs.
-    cat > "$tmpbin/podman" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-
-case "$1 ${2:-}" in
-    "machine inspect")
-        case "${4:-}" in
-            *.Mounts*)
-                [ -n "${RODIN_TEST_MOUNTS:-}" ] || exit 125
-                printf '%s\n' "$RODIN_TEST_MOUNTS"
-                ;;
-            *ConfigDir*)
-                printf '%s\n' "${RODIN_TEST_MACHINE_CONFIG:-}"
-                ;;
-        esac
-        exit 0
-        ;;
-    "image inspect")
-        if [ "${3:-}" = "--format" ]; then
-            printf '%s\n' amd64
-        fi
-        exit 0
-        ;;
-esac
-
-printf '<%s>\n' "$@" > "$RODIN_TEST_ARGS"
-EOF
-    chmod +x "$tmpbin/podman"
-
-    # cwd outside every shared prefix: an actionable error, no run
-    set +e
-    output="$(
-        cd "$models_dir" \
-            && RODIN_TEST_MOUNTS='/nonexistent-prefix' RODIN_TEST_ARGS="$args_file" \
-                RODIN_RUNTIME=podman RODIN_DIR="" \
-                PATH="$tmpbin:$PATH" "$ROOT_DIR/rodin" build model.zip 2>&1
-    )"
-    status=$?
-    set -e
-    if [ "$status" -eq 0 ]; then
+    # podman 4.x (no config file): mounts come from the inspect
+    # template; a cwd outside every shared prefix gets an actionable
+    # error before any build or run
+    run_podman_wrapper RODIN_TEST_MOUNTS='/nonexistent-prefix'
+    if [ "$wrapper_status" -eq 0 ]; then
         fail "podman on macOS should refuse a cwd the VM does not share"
     fi
-    assert_contains "$output" "does not share" \
+    assert_contains "$wrapper_output" "does not share" \
         "the unshared-cwd error should explain the problem"
-    assert_contains "$output" "podman machine set --volume" \
+    assert_contains "$wrapper_output" "podman machine set --volume" \
         "the unshared-cwd error should show the sharing command"
     if [ -e "$args_file" ]; then
         fail "an unshared cwd should fail before any podman build/run"
@@ -617,47 +702,31 @@ EOF
     # single-line JSON, so several mounts share one line.
     printf '{"Mounts":[{"Source":"/nonexistent-prefix","Target":"/nonexistent-prefix","Type":"virtiofs"},{"Source":"/other-prefix","Target":"/other-prefix","Type":"virtiofs"}]}\n' \
         > "$tmpbin/machine-config.json"
-    set +e
-    output="$(
-        cd "$models_dir" \
-            && RODIN_TEST_MACHINE_CONFIG="$tmpbin/machine-config.json" \
-                RODIN_TEST_ARGS="$args_file" \
-                RODIN_RUNTIME=podman RODIN_DIR="" \
-                PATH="$tmpbin:$PATH" "$ROOT_DIR/rodin" build model.zip 2>&1
-    )"
-    status=$?
-    set -e
-    if [ "$status" -eq 0 ]; then
-        fail "the config-file mount fallback should also refuse an unshared cwd"
+    run_podman_wrapper RODIN_TEST_MACHINE_CONFIG="$tmpbin/machine-config.json"
+    if [ "$wrapper_status" -eq 0 ]; then
+        fail "the config-file mount source should also refuse an unshared cwd"
     fi
-    assert_contains "$output" "does not share" \
-        "the config-file mount fallback should produce the same error"
+    assert_contains "$wrapper_output" "does not share" \
+        "the config-file mount source should produce the same error"
 
     # The shared mount sits first on the single line: extraction must
     # see every Source, not just the line's last one
     printf '{"Mounts":[{"Source":"%s","Target":"%s","Type":"virtiofs"},{"Source":"/other-prefix","Target":"/other-prefix","Type":"virtiofs"}]}\n' \
-        "$models_dir" "$models_dir" > "$tmpbin/machine-config.json"
-    (
-        cd "$models_dir" \
-            && RODIN_TEST_MACHINE_CONFIG="$tmpbin/machine-config.json" \
-                RODIN_TEST_ARGS="$args_file" \
-                RODIN_RUNTIME=podman RODIN_DIR="" \
-                PATH="$tmpbin:$PATH" "$ROOT_DIR/rodin" build model.zip
-    )
-    args="$(cat "$args_file")"
-    assert_contains "$args" "<run>" \
-        "a shared cwd from the config-file fallback should proceed to the run"
+        "$models_dir_phys" "$models_dir_phys" > "$tmpbin/machine-config.json"
+    run_podman_wrapper RODIN_TEST_MACHINE_CONFIG="$tmpbin/machine-config.json"
+    if [ "$wrapper_status" -ne 0 ]; then
+        fail "a shared cwd from the config file should proceed: $wrapper_output"
+    fi
+    assert_contains "$(cat "$args_file")" "<run>" \
+        "a shared cwd from the config-file source should proceed to the run"
     rm -f "$args_file"
 
-    # cwd under a shared prefix: dispatches to podman run as usual
-    (
-        cd "$models_dir" \
-            && RODIN_TEST_MOUNTS="$models_dir" RODIN_TEST_ARGS="$args_file" \
-                RODIN_RUNTIME=podman RODIN_DIR="" \
-                PATH="$tmpbin:$PATH" "$ROOT_DIR/rodin" build model.zip
-    )
-    args="$(cat "$args_file")"
-    assert_contains "$args" "<run>" \
+    # Shared prefix via the 4.x template: dispatches to podman run too
+    run_podman_wrapper RODIN_TEST_MOUNTS="$models_dir_phys"
+    if [ "$wrapper_status" -ne 0 ]; then
+        fail "a shared cwd from the inspect template should proceed: $wrapper_output"
+    fi
+    assert_contains "$(cat "$args_file")" "<run>" \
         "a shared cwd should proceed to the container run"
 }
 
@@ -698,32 +767,46 @@ test_rodin_wrapper_survives_underivable_prefix() {
 }
 
 test_rodin_headless_rejects_missing_archives() {
-    local tmpdir rodin_dir models_dir
-    tmpdir="$(new_tmpdir)"
-    rodin_dir="$tmpdir/rodin"
-    models_dir="$tmpdir/models"
-    mkdir -p "$rodin_dir" "$models_dir"
+    local rodin_dir models_dir
+    setup_engine_fixture
 
     assert_fails_with "ERROR: No .zip archives found in $models_dir" \
-        env DISPLAY=:0 RODIN_DIR="$rodin_dir" MODELS_DIR="$models_dir" \
-        "$ROOT_DIR/rodin-headless.sh"
-
+        run_engine
     assert_fails_with "ERROR: None of the requested archives were found in $models_dir" \
-        env DISPLAY=:0 RODIN_DIR="$rodin_dir" MODELS_DIR="$models_dir" \
-        "$ROOT_DIR/rodin-headless.sh" missing.zip
+        run_engine missing.zip
 }
 
 test_rodin_headless_requires_prob_plugin() {
-    local tmpdir rodin_dir models_dir
-    tmpdir="$(new_tmpdir)"
-    rodin_dir="$tmpdir/rodin"
-    models_dir="$tmpdir/models"
-    mkdir -p "$rodin_dir/plugins" "$models_dir"
+    local rodin_dir models_dir
+    setup_engine_fixture
+    rm -rf "$rodin_dir/plugins/de.prob.core_1.0.0"
     : > "$models_dir/model.zip"
 
     assert_fails_with "ERROR: ProB Rodin plugin not installed in $rodin_dir" \
-        env DISPLAY=:0 RODIN_DIR="$rodin_dir" MODELS_DIR="$models_dir" \
-        "$ROOT_DIR/rodin-headless.sh" model.zip
+        run_engine model.zip
+}
+
+test_rodin_headless_refuses_unwritable_models_dir() {
+    local rodin_dir models_dir output status
+    # Root can write anywhere; the check is a no-op under uid 0.
+    if [ "$(id -u)" -eq 0 ]; then
+        return 0
+    fi
+    setup_engine_fixture
+    : > "$models_dir/model.zip"
+    chmod a-w "$models_dir"
+
+    set +e
+    output="$(run_engine model.zip 2>&1)"
+    status=$?
+    set -e
+    chmod u+w "$models_dir"
+
+    if [ "$status" -eq 0 ]; then
+        fail "a read-only models directory should be refused before the build"
+    fi
+    assert_contains "$output" "not writable" \
+        "the read-only models dir error should name the problem"
 }
 
 test_resolve_rodin_home_handles_layouts() {
@@ -849,40 +932,23 @@ test_find_archive_project_roots_lists_every_project() {
 }
 
 test_rodin_headless_extracts_the_project_root_dir() {
-    local tmpdir rodin_dir models_dir staging output
-    tmpdir="$(new_tmpdir)"
-    rodin_dir="$tmpdir/rodin"
-    models_dir="$tmpdir/models"
-    staging="$tmpdir/staging"
-    mkdir -p "$rodin_dir/plugins/de.prob.core_1.0.0" "$models_dir" \
-        "$staging/docs" "$staging/proj"
+    local rodin_dir models_dir staging output
+    setup_engine_fixture
+    staging="$(new_tmpdir)"
+    mkdir -p "$staging/docs" "$staging/proj"
     : > "$staging/docs/readme.txt"
     : > "$staging/proj/M1.bum"
     (cd "$staging" && zip -q -r "$models_dir/twin.zip" .)
 
     # The run dies later (no real Rodin install) — only step 1 matters.
     set +e
-    output="$(
-        env DISPLAY=:0 RODIN_SKIP_GUI_CHECK=1 \
-            RODIN_DIR="$rodin_dir" MODELS_DIR="$models_dir" \
-            "$ROOT_DIR/rodin-headless.sh" twin.zip 2>&1
-    )"
+    output="$(run_engine twin.zip 2>&1)"
     set -e
 
     assert_contains "$output" "twin → proj" \
         "extraction should pick the directory holding Event-B sources, not the first top-level dir"
     assert_not_contains "$output" "WARNING: twin.zip contains" \
         "a single project root must not trigger the multi-project warning"
-}
-
-test_rodin_headless_warns_on_multi_project_archives() {
-    local script
-    script="$(cat "$ROOT_DIR/rodin-headless.sh")"
-
-    assert_contains "$script" "project roots; only" \
-        "extraction should warn when an archive holds more than one project"
-    assert_contains "$script" 'find_archive_project_roots "$tmpdir"' \
-        "the warning should count roots with the shared lib helper"
 }
 
 test_run_with_filtered_output_preserves_failure_status() {
@@ -1120,7 +1186,7 @@ EOF
 }
 
 test_seed_equinox_config_area_builds_throwaway_configuration() {
-    local home config_area seeded
+    local home config_area seeded seeded_ini
     home="$(new_tmpdir)"
     config_area="$(new_tmpdir)/config"
 
@@ -1139,10 +1205,11 @@ EOF
         "rodinbuilder.run1,1.0.0,file:/tmp/plug/rodinbuilder_run1.jar,4,false" \
         || fail "seeding a configuration area from a complete install should succeed"
 
-    assert_contains "$(cat "$config_area/config.ini")" \
+    seeded_ini="$(cat "$config_area/config.ini")"
+    assert_contains "$seeded_ini" \
         "eclipse.p2.data.area=file:$home/p2/" \
         "the p2 data area must stay pinned to the install, not the temp area"
-    assert_contains "$(cat "$config_area/config.ini")" \
+    assert_contains "$seeded_ini" \
         "osgi.bundles.defaultStartLevel=4" \
         "other config.ini properties should be preserved"
     seeded="$(cat "$config_area/org.eclipse.equinox.simpleconfigurator/bundles.info")"
@@ -1278,39 +1345,29 @@ test_rodin_headless_reports_static_check_accuracy() {
 }
 
 test_rodin_headless_parses_strict_flag() {
-    local tmpdir rodin_dir models_dir
-    tmpdir="$(new_tmpdir)"
-    rodin_dir="$tmpdir/rodin"
-    models_dir="$tmpdir/models"
-    mkdir -p "$rodin_dir" "$models_dir"
+    local rodin_dir models_dir
+    setup_engine_fixture
 
     # Both flags are consumed in either order, reaching the
     # archive-selection error rather than tripping path resolution.
     assert_fails_with "ERROR: No .zip archives found in $models_dir" \
-        env DISPLAY=:0 RODIN_DIR="$rodin_dir" MODELS_DIR="$models_dir" \
-            "$ROOT_DIR/rodin-headless.sh" --strict --mode check
+        run_engine --strict --mode check
     assert_fails_with "ERROR: No .zip archives found in $models_dir" \
-        env DISPLAY=:0 RODIN_DIR="$rodin_dir" MODELS_DIR="$models_dir" \
-            "$ROOT_DIR/rodin-headless.sh" --mode check --strict
+        run_engine --mode check --strict
 
     # Flags may also follow archive names, and unknown options fail by
     # name instead of falling through to basename as a bogus archive.
     assert_fails_with "ERROR: None of the requested archives were found in $models_dir" \
-        env DISPLAY=:0 RODIN_DIR="$rodin_dir" MODELS_DIR="$models_dir" \
-            "$ROOT_DIR/rodin-headless.sh" missing.zip --strict
+        run_engine missing.zip --strict
     assert_fails_with "unknown option '--bogus'" \
-        env DISPLAY=:0 RODIN_DIR="$rodin_dir" MODELS_DIR="$models_dir" \
-            "$ROOT_DIR/rodin-headless.sh" --bogus model.zip
+        run_engine --bogus model.zip
 }
 
 test_rodin_headless_strict_rejects_multi_project_archives() {
-    local tmpdir rodin_dir models_dir staging output
-    tmpdir="$(new_tmpdir)"
-    rodin_dir="$tmpdir/rodin"
-    models_dir="$tmpdir/models"
-    staging="$tmpdir/staging"
-    mkdir -p "$rodin_dir/plugins/de.prob.core_1.0.0" "$models_dir" \
-        "$staging/alpha" "$staging/beta"
+    local rodin_dir models_dir staging output
+    setup_engine_fixture
+    staging="$(new_tmpdir)"
+    mkdir -p "$staging/alpha" "$staging/beta"
     : > "$staging/alpha/M1.bum"
     : > "$staging/beta/M2.bum"
     (cd "$staging" && zip -q -r "$models_dir/multi.zip" .)
@@ -1318,18 +1375,12 @@ test_rodin_headless_strict_rejects_multi_project_archives() {
     # Strict promises a non-zero exit for anything never checked;
     # silently dropped projects are exactly that.
     assert_fails_with "strict mode refuses to drop" \
-        env DISPLAY=:0 RODIN_SKIP_GUI_CHECK=1 \
-            RODIN_DIR="$rodin_dir" MODELS_DIR="$models_dir" \
-            "$ROOT_DIR/rodin-headless.sh" --strict multi.zip
+        run_engine --strict multi.zip
 
     # Without strict the drop is loud but not fatal (the run dies later
     # for unrelated reasons — no real Rodin install).
     set +e
-    output="$(
-        env DISPLAY=:0 RODIN_SKIP_GUI_CHECK=1 \
-            RODIN_DIR="$rodin_dir" MODELS_DIR="$models_dir" \
-            "$ROOT_DIR/rodin-headless.sh" multi.zip 2>&1
-    )"
+    output="$(run_engine multi.zip 2>&1)"
     set -e
     assert_contains "$output" "WARNING: multi.zip contains 2 project roots" \
         "non-strict runs should warn about dropped projects"
@@ -1694,16 +1745,16 @@ test_installer_records_resolved_versions() {
     setup_installer_fixture
 
     install_rodin_fixture > /dev/null
-    assert_contains "$(cat "$INSTALLER_PREFIX/.rodin-headless-versions")" \
-        "rodin=3.9" \
+    local manifest
+    manifest="$(cat "$INSTALLER_PREFIX/.rodin-headless-versions")"
+    assert_contains "$manifest" "rodin=3.9" \
         "the rodin phase should record its resolved version"
-    assert_contains "$(cat "$INSTALLER_PREFIX/.rodin-headless-versions")" \
+    assert_contains "$manifest" \
         "rodin-tarball=rodin-3.9-linux.gtk.x86_64.tar.gz" \
         "the rodin phase should record the exact tarball"
 
     run_installer --prefix "$INSTALLER_PREFIX" --only prob --prob-version 1.15.1 \
         > /dev/null
-    local manifest
     manifest="$(cat "$INSTALLER_PREFIX/.rodin-headless-versions")"
     assert_contains "$manifest" "rodin=3.9" \
         "the prob phase should preserve the rodin entry"
@@ -1738,6 +1789,8 @@ test_dockerfile_installs_headless_helper() {
         "Dockerfile should forward the ProB version build argument"
     assert_contains "$dockerfile" "ln -s /opt/prob/probcli /usr/local/bin/probcli" \
         "Dockerfile should expose probcli on the container PATH"
+    assert_contains "$dockerfile" "install -d -m 1777 /tmp/.X11-unix" \
+        "Dockerfile should pre-create the X11 socket dir for non-root users"
     assert_contains "$dockerfile" 'LABEL rodin.version.requested="$RODIN_VERSION"' \
         "Dockerfile should label the requested Rodin version"
     assert_contains "$dockerfile" 'rodin.tarball.requested="$RODIN_TARBALL"' \
@@ -1767,17 +1820,19 @@ main() {
     test_darwin_gui_session_probe
     test_rodin_wrapper_falls_back_without_gui_session
     test_rodin_headless_fast_fails_without_gui_session
+    test_rodin_adds_user_mapping_for_rootful_docker
+    test_rodin_omits_user_mapping_for_rootless_podman
     test_rodin_podman_mac_requires_shared_cwd
     test_default_rodin_prefix_requires_home_or_rodin_prefix
     test_rodin_wrapper_survives_underivable_prefix
     test_rodin_headless_rejects_missing_archives
     test_rodin_headless_requires_prob_plugin
+    test_rodin_headless_refuses_unwritable_models_dir
     test_resolve_rodin_home_handles_layouts
     test_find_archive_project_root_supports_context_only_models
     test_find_archive_project_root_falls_back_to_project_metadata
     test_find_archive_project_roots_lists_every_project
     test_rodin_headless_extracts_the_project_root_dir
-    test_rodin_headless_warns_on_multi_project_archives
     test_run_with_filtered_output_preserves_failure_status
     test_run_with_filtered_output_preserves_success_status
     test_run_with_optional_timeout_preserves_success_status

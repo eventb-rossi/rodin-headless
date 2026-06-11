@@ -90,6 +90,15 @@ if [ -z "$RODIN_DIR" ] || [ -z "$MODELS_DIR" ]; then
     exit 1
 fi
 
+# Step 4 writes repackaged zips back into MODELS_DIR in every mode and
+# runtime; a read-only directory would only fail after the whole
+# build. Checked here as the effective uid, which also covers
+# container --user runs against the bind mount.
+if [ ! -w "$MODELS_DIR" ]; then
+    echo "ERROR: models directory $MODELS_DIR is not writable; repackaging after the build would fail" >&2
+    exit 1
+fi
+
 # The directory with the Eclipse layout: RODIN_DIR itself on Linux,
 # Contents/Eclipse inside the macOS app bundle.
 RODIN_HOME="$(resolve_rodin_home_or_root "$RODIN_DIR")"

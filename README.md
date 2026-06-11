@@ -127,6 +127,8 @@ runtimes; in Docker mode the wrapper forwards them into the container.
 
 In Docker mode the `rodin` wrapper auto-detects SELinux and applies the `:Z` volume flag. Docker and podman are both supported.
 
+With a rootful engine (the typical Linux Docker daemon) the wrapper runs the container as the invoking user (`--user` with `HOME=/tmp`), so the repackaged zips in the mounted directory come back owned by you instead of root. Rootless podman/docker already map container root to the host user and are left alone.
+
 On macOS, podman only bind-mounts a fixed set of host prefixes into its VM (typically `/Users`, `/private`, `/var/folders` — not `/Volumes`). The wrapper checks this up front and fails with the exact `podman machine set --volume` command to run instead of letting the runtime die with an opaque `statfs ... no such file or directory`. Docker Desktop shares `/Volumes` by default and needs no such step.
 
 ### Direct engine invocation

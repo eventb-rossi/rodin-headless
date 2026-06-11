@@ -64,6 +64,10 @@ RUN /tmp/install/rodin-install.sh --prefix /opt --only prob \
     && rm -rf /tmp/install
 
 # ── Runtime configuration ──────────────────────────────────────────
+# Pre-create the X11 socket directory root-owned and sticky so Xvfb
+# starts cleanly when the container runs as a non-root --user.
+RUN install -d -m 1777 /tmp/.X11-unix
+
 COPY --chmod=755 rodin-headless.sh rodin-headless-lib.sh entrypoint.sh \
     /usr/local/bin/
 

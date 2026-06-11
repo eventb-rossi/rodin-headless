@@ -224,8 +224,42 @@ if image_needs_build; then
     "$RUNTIME" build ${PLATFORM_ARGS[@]+"${PLATFORM_ARGS[@]}"} -t "$IMAGE" "$SCRIPT_DIR"
 fi
 
+# Rootless engines map container root to the invoking host user, so
+# files written into the bind mount already come back correctly owned;
+# forcing a uid there would shift ownership into the subuid range and
+# lose write access to the mount. An undeterminable engine counts as
+# rootful — the rootful default (root-owned output) is the case worth
+# fixing.
+runtime_is_rootless() {
+    case "$RUNTIME" in
+        docker)
+            "$RUNTIME" info --format '{{.SecurityOptions}}' 2>/dev/null \
+                | grep -q 'name=rootless'
+            ;;
+        podman)
+            [ "$("$RUNTIME" info --format '{{.Host.Security.Rootless}}' 2>/dev/null)" = true ]
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+# Run rootful containers as the host user so repackaged zips in the
+# mounted cwd are not root-owned. The host uid has no passwd entry in
+# the image, so HOME=/tmp gives Equinox (~/.eclipse), ProB (~/.prob),
+# and Java preferences a writable home. Possible only because the
+# engine never writes to the /opt/rodin install.
+# For a root invoker the mapping is a no-op, so skip the engine's
+# daemon round-trip entirely.
+USER_ARGS=()
+if [ "$(id -u)" -ne 0 ] && ! runtime_is_rootless; then
+    USER_ARGS=(--user "$(id -u):$(id -g)" -e HOME=/tmp)
+fi
+
 exec "$RUNTIME" run --rm \
     ${PLATFORM_ARGS[@]+"${PLATFORM_ARGS[@]}"} \
+    ${USER_ARGS[@]+"${USER_ARGS[@]}"} \
     -e RODIN_BUILD_TIMEOUT \
     -e RODIN_BUILD_TIMEOUT_KILL_AFTER \
     -v "$(pwd):/models${VOLUME_FLAG}" \

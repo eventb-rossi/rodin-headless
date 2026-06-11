@@ -4,8 +4,9 @@
 # This script:
 # 1. Extracts .zip archives into a Rodin workspace directory
 # 2. Generates .project files where missing (needed for Rodin to recognize projects)
-# 3. Installs a temporary OSGi plugin into Rodin that programmatically imports
-#    and builds all projects in the workspace
+# 3. Compiles a temporary OSGi plugin that programmatically imports and
+#    builds all projects in the workspace, registered in a throwaway
+#    Equinox configuration area (the Rodin install is never modified)
 # 4. Runs Rodin headless with the plugin
 # 5. Repackages the archives with the generated .bcm/.bcc artifacts
 #
@@ -59,21 +60,16 @@ if [ -z "${DISPLAY:-}" ] && command -v Xvfb >/dev/null 2>&1; then
 fi
 
 # Registered before any validation exit so an early failure still kills
-# the Xvfb we just started; workspace/lock state is guarded because it
-# is only created further down.
+# the Xvfb we just started. Everything a run creates lives in its own
+# temp directories — the Rodin install is never written to, so even a
+# hard kill (which skips this trap) leaves the install pristine.
 WORKSPACE=""
 PLUGIN_DIR=""
+CONFIG_AREA=""
 cleanup() {
-    # rm -f treats empty operands as already-removed, so the not-yet-set
-    # case needs no guard.
-    rm -rf "$WORKSPACE" "$PLUGIN_DIR"
-    if [ -n "$RODIN_LOCK_KIND" ]; then
-        rm -f "$RODIN_PLUGINS/$BUNDLE_JAR_NAME"
-        if [ -f "$BUNDLES_INFO" ]; then
-            remove_exact_line "$BUNDLES_INFO" "$BUNDLE_INFO_LINE"
-        fi
-        release_rodin_lock
-    fi
+    # rm -rf treats empty operands as already-removed, so the
+    # not-yet-set case needs no guard.
+    rm -rf "$WORKSPACE" "$PLUGIN_DIR" "$CONFIG_AREA"
     [ -n "${XVFB_PID:-}" ] && kill "$XVFB_PID" 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -157,13 +153,22 @@ fi
 
 WORKSPACE=$(mktemp -d)
 PLUGIN_DIR=$(mktemp -d)
-BUNDLES_INFO="$RODIN_HOME/configuration/org.eclipse.equinox.simpleconfigurator/bundles.info"
-LOCK_FILE="$RODIN_HOME/.rodinbuilder.lock"
+CONFIG_AREA=$(mktemp -d)
+case "$PLUGIN_DIR" in
+    *,*)
+        # bundles.info is comma-separated; a comma in the temp path
+        # would split the bundle's file: URI into extra fields.
+        echo "ERROR: temp directory '$PLUGIN_DIR' contains a comma, which bundles.info cannot represent — set TMPDIR to a comma-free path" >&2
+        exit 1
+        ;;
+esac
 RUN_ID="$(basename "$PLUGIN_DIR" | tr -cd '[:alnum:]')"
 BUNDLE_VERSION="1.0.0"
 BUNDLE_SYMBOLIC_NAME="rodinbuilder.$RUN_ID"
 BUNDLE_JAR_NAME="rodinbuilder_${RUN_ID}.jar"
-BUNDLE_INFO_LINE="$BUNDLE_SYMBOLIC_NAME,$BUNDLE_VERSION,plugins/$BUNDLE_JAR_NAME,4,false"
+# Absolute URI: the bundle is loaded from its temp directory, never
+# copied into the install.
+BUNDLE_INFO_LINE="$BUNDLE_SYMBOLIC_NAME,$BUNDLE_VERSION,file:$PLUGIN_DIR/$BUNDLE_JAR_NAME,4,false"
 APPLICATION_ID="$BUNDLE_SYMBOLIC_NAME.headlessBuilder"
 RODIN_BUILD_TIMEOUT="${RODIN_BUILD_TIMEOUT:-60m}"
 RODIN_BUILD_TIMEOUT_KILL_AFTER="${RODIN_BUILD_TIMEOUT_KILL_AFTER:-30s}"
@@ -607,15 +612,13 @@ jar cfm "$PLUGIN_DIR/$BUNDLE_JAR_NAME" "$PLUGIN_DIR/META-INF/MANIFEST.MF" \
 echo "  Plugin built: $PLUGIN_DIR/$BUNDLE_JAR_NAME"
 echo
 
-# --- Step 3: Install plugin and run Rodin headless builder ---
+# --- Step 3: Run Rodin headless builder ---
 echo "=== Step 3: Running Rodin headless builder ==="
-# Install plugin to plugins/ directory and register in bundles.info.
-# Hold the lock until cleanup so concurrent standalone runs cannot clobber the bundle.
-acquire_rodin_lock "$LOCK_FILE"
-cp "$PLUGIN_DIR/$BUNDLE_JAR_NAME" "$RODIN_PLUGINS/$BUNDLE_JAR_NAME"
-if [ -f "$BUNDLES_INFO" ]; then
-    echo "$BUNDLE_INFO_LINE" >> "$BUNDLES_INFO"
-fi
+# Register the plugin in a throwaway configuration area instead of
+# copying it into the install: the install stays read-only, so a hard
+# kill cannot leave a stale bundle behind to poison later launches,
+# and concurrent runs cannot clobber one another.
+seed_equinox_config_area "$RODIN_HOME" "$CONFIG_AREA" "$BUNDLE_INFO_LINE"
 
 # SWT's Cocoa port must run on the JVM's first thread; Linux JVMs
 # reject the flag, so it is spliced in on Darwin only.
@@ -628,6 +631,8 @@ fi
 LAUNCHER_JAR=$(resolve_latest_jar "$RODIN_PLUGINS" org.eclipse.equinox.launcher)
 RODIN_VMARGS=()
 if [ -n "$LAUNCHER_JAR" ]; then
+    # -install is load-bearing: the relative plugins/... locations in
+    # the seeded bundles.info resolve against the install area.
     RODIN_CMD=(java "-Drodinbuilder.mode=$BUILD_MODE" "-Drodinbuilder.strict=$STRICT_MODE"
         "${JDK_XML_RELAXED_OPTS[@]}"
         ${JAVA_PLATFORM_OPTS[@]+"${JAVA_PLATFORM_OPTS[@]}"}
@@ -644,11 +649,13 @@ fi
 
 echo "Rodin build timeout: $RODIN_BUILD_TIMEOUT"
 
+# No -clean: the freshly seeded configuration area has no caches.
 LAUNCH_STATUS=0
 run_with_filtered_output \
     run_with_optional_timeout "$RODIN_BUILD_TIMEOUT" "$RODIN_BUILD_TIMEOUT_KILL_AFTER" \
     "${RODIN_CMD[@]}" \
-    -nosplash -clean \
+    -nosplash \
+    -configuration "$CONFIG_AREA" \
     -application "$APPLICATION_ID" \
     -data "$WORKSPACE" \
     -consolelog \

@@ -208,96 +208,38 @@ run_with_optional_timeout() {
     run_with_watchdog_timeout "$duration" "$kill_after" "$@"
 }
 
-# Serialize Rodin launches against a shared install. Linux prefers
-# flock (kernel-backed, released on crash); macOS always uses the
-# mkdir spinlock — keying the choice on the per-process PATH would let
-# a run that sees a Homebrew flock and one that doesn't lock different
-# objects and miss each other. Like flock, a live owner is waited on
-# indefinitely; only stale locks are reclaimed. release_rodin_lock is
-# idempotent and safe from an EXIT trap.
-RODIN_LOCK_KIND=""
-RODIN_LOCK_PATH=""
+# Seed a throwaway Equinox configuration area from a Rodin install, so
+# a run can register its transient builder bundle without writing to
+# the install itself. config.ini is copied with eclipse.p2.data.area
+# pinned to the install's absolute p2 directory (the shipped
+# @config.dir/../p2/ would resolve against the temp area and trip the
+# auto-started p2 dropins reconciler); bundles.info is the install's
+# copy plus one line registering the builder bundle by absolute file:
+# URI. The copied relative plugins/... lines keep working because
+# simpleconfigurator resolves them against osgi.install.area, not the
+# configuration area.
+seed_equinox_config_area() {
+    local rodin_home="$1" config_area="$2" extra_bundle_line="$3"
+    local src="$rodin_home/configuration"
+    local dst_sc="$config_area/org.eclipse.equinox.simpleconfigurator"
 
-# kill -0 cannot tell a dead process from another user's (EPERM), so
-# fall back to ps before declaring a lock owner dead and stealing its
-# lock. Without ps (minimal containers) the kill verdict stands.
-lock_owner_alive() {
-    kill -0 "$1" 2>/dev/null && return 0
-    command -v ps >/dev/null 2>&1 || return 1
-    ps -p "$1" >/dev/null 2>&1
-}
-
-acquire_rodin_lock() {
-    local lock_file="$1" lock_dir stale_dir pid stale_pid no_pid_since
-
-    if [ "$(host_os)" != Darwin ] && command -v flock >/dev/null 2>&1; then
-        # Fixed descriptor: bash 3.2 has no {var}> auto-allocation.
-        exec 9> "$lock_file"
-        flock 9
-        RODIN_LOCK_KIND=flock
-        return 0
+    if [ ! -f "$src/config.ini" ] \
+        || [ ! -f "$src/org.eclipse.equinox.simpleconfigurator/bundles.info" ]; then
+        echo "ERROR: $src has no config.ini + bundles.info — not a simpleconfigurator-based Eclipse install" >&2
+        return 1
     fi
-
-    lock_dir="$lock_file.d"
-    no_pid_since=""
-    until mkdir "$lock_dir" 2>/dev/null; do
-        pid=""
-        read -r pid 2>/dev/null < "$lock_dir/pid" || pid=""
-
-        if [ -n "$pid" ]; then
-            no_pid_since=""
-            if lock_owner_alive "$pid"; then
-                sleep 1
-                continue
-            fi
-        else
-            # Grace for the owner's mkdir-to-pid-write window; only a
-            # lock that stays ownerless for 30s is considered stale.
-            if [ -z "$no_pid_since" ]; then
-                no_pid_since=$SECONDS
-            fi
-            if [ $(( SECONDS - no_pid_since )) -lt 30 ]; then
-                sleep 1
-                continue
-            fi
-        fi
-
-        # Steal the stale lock via rename: exactly one contender wins
-        # the mv, so a lock freshly re-acquired by another waiter
-        # cannot be deleted out from under it by a racer still holding
-        # the old owner's pid in hand.
-        stale_dir="$lock_dir.stale.$$"
-        if mv "$lock_dir" "$stale_dir" 2>/dev/null; then
-            # Re-acquired between our liveness check and the mv? Hand
-            # it back instead of destroying a live lock.
-            stale_pid=""
-            read -r stale_pid 2>/dev/null < "$stale_dir/pid" || stale_pid=""
-            if [ -n "$stale_pid" ] && [ "$stale_pid" != "$pid" ] \
-                && lock_owner_alive "$stale_pid"; then
-                mv "$stale_dir" "$lock_dir" 2>/dev/null || rm -rf "$stale_dir"
-            else
-                rm -rf "$stale_dir"
-            fi
-        fi
-        no_pid_since=""
-    done
-    printf '%s\n' "$$" > "$lock_dir/pid"
-    RODIN_LOCK_KIND=dir
-    RODIN_LOCK_PATH="$lock_dir"
-}
-
-release_rodin_lock() {
-    case "$RODIN_LOCK_KIND" in
-        flock)
-            # Closing the descriptor releases the kernel lock.
-            exec 9>&-
-            ;;
-        dir)
-            rm -rf "$RODIN_LOCK_PATH"
-            ;;
-    esac
-    RODIN_LOCK_KIND=""
-    RODIN_LOCK_PATH=""
+    mkdir -p "$dst_sc"
+    # Drop-and-append rather than a sed replace: the pinned line must
+    # land even when the shipped config.ini lacks the key (an unpinned
+    # data area would resolve against the temp config area), and
+    # printf keeps paths with replacement metacharacters (&, |) intact.
+    grep -v '^eclipse.p2.data.area=' "$src/config.ini" \
+        > "$config_area/config.ini" || true
+    printf 'eclipse.p2.data.area=file:%s/p2/\n' "$rodin_home" \
+        >> "$config_area/config.ini"
+    cat "$src/org.eclipse.equinox.simpleconfigurator/bundles.info" \
+        > "$dst_sc/bundles.info"
+    printf '%s\n' "$extra_bundle_line" >> "$dst_sc/bundles.info"
 }
 
 # SWT's Cocoa port talks to WindowServer, which only a logged-in
@@ -372,16 +314,6 @@ resolve_rodin_launcher() {
         */Contents/Eclipse) printf '%s\n' "${home%/Eclipse}/MacOS/rodin" ;;
         *)                  printf '%s\n' "$home/rodin" ;;
     esac
-}
-
-remove_exact_line() {
-    local file_path="$1"
-    local line_to_remove="$2"
-    local temp_file
-
-    temp_file="$(mktemp)"
-    grep -Fvx -- "$line_to_remove" "$file_path" >"$temp_file" || true
-    mv "$temp_file" "$file_path"
 }
 
 resolve_latest_path() {

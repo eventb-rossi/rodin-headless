@@ -1119,75 +1119,72 @@ EOF
         "gtimeout fallback should forward the timeout duration"
 }
 
-test_lock_helpers_acquire_and_release() {
-    local tmpdir lock_file
-    tmpdir="$(new_tmpdir)"
-    lock_file="$tmpdir/test.lock"
+test_seed_equinox_config_area_builds_throwaway_configuration() {
+    local home config_area seeded
+    home="$(new_tmpdir)"
+    config_area="$(new_tmpdir)/config"
 
-    (
-        . "$ROOT_DIR/rodin-headless-lib.sh"
-        acquire_rodin_lock "$lock_file"
-        release_rodin_lock
-        acquire_rodin_lock "$lock_file"
-        release_rodin_lock
-    ) || fail "lock helpers should support repeated acquire/release cycles"
+    mkdir -p "$home/configuration/org.eclipse.equinox.simpleconfigurator"
+    cat > "$home/configuration/config.ini" <<'EOF'
+eclipse.p2.data.area=@config.dir/../p2/
+osgi.bundles.defaultStartLevel=4
+EOF
+    cat > "$home/configuration/org.eclipse.equinox.simpleconfigurator/bundles.info" <<'EOF'
+org.eclipse.osgi,3.18.0,plugins/org.eclipse.osgi_3.18.0.jar,-1,true
+de.prob.core,9.0.0,plugins/de.prob.core_9.0.0/,4,false
+EOF
+
+    mkdir -p "$config_area"
+    lib_call seed_equinox_config_area "$home" "$config_area" \
+        "rodinbuilder.run1,1.0.0,file:/tmp/plug/rodinbuilder_run1.jar,4,false" \
+        || fail "seeding a configuration area from a complete install should succeed"
+
+    assert_contains "$(cat "$config_area/config.ini")" \
+        "eclipse.p2.data.area=file:$home/p2/" \
+        "the p2 data area must stay pinned to the install, not the temp area"
+    assert_contains "$(cat "$config_area/config.ini")" \
+        "osgi.bundles.defaultStartLevel=4" \
+        "other config.ini properties should be preserved"
+    seeded="$(cat "$config_area/org.eclipse.equinox.simpleconfigurator/bundles.info")"
+    assert_contains "$seeded" "org.eclipse.osgi,3.18.0" \
+        "the install's bundle registrations should be copied"
+    assert_contains "$seeded" \
+        "rodinbuilder.run1,1.0.0,file:/tmp/plug/rodinbuilder_run1.jar,4,false" \
+        "the builder bundle should be registered by absolute URI"
+    assert_not_contains \
+        "$(cat "$home/configuration/org.eclipse.equinox.simpleconfigurator/bundles.info")" \
+        "rodinbuilder" \
+        "the install's own bundles.info must stay untouched"
+
+    # A config.ini without the key must still get the pinned data area
+    # (unpinned it would resolve against the temp config area)
+    printf 'osgi.bundles.defaultStartLevel=4\n' > "$home/configuration/config.ini"
+    rm -rf "$config_area"
+    mkdir -p "$config_area"
+    lib_call seed_equinox_config_area "$home" "$config_area" \
+        "x,1.0.0,file:/x.jar,4,false" \
+        || fail "seeding should succeed when config.ini lacks the p2 data area key"
+    assert_contains "$(cat "$config_area/config.ini")" \
+        "eclipse.p2.data.area=file:$home/p2/" \
+        "a missing p2 data area key should still be pinned to the install"
+
+    assert_fails_with "not a simpleconfigurator-based" \
+        lib_call seed_equinox_config_area "$(new_tmpdir)" "$config_area" \
+            "x,1.0.0,file:/x.jar,4,false"
 }
 
-# Restrict PATH to the external tools the mkdir spinlock needs, so
-# flock is never found and the fallback branch runs on any host.
-make_spinlock_path() {
-    local tmpbin="$1" tool
+test_rodin_headless_uses_throwaway_configuration_area() {
+    local script
+    script="$(cat "$ROOT_DIR/rodin-headless.sh")"
 
-    for tool in mkdir rm sleep mv; do
-        ln -s "$(command -v "$tool")" "$tmpbin/$tool"
-    done
-    # ps backs the cross-user liveness check; optional in the lib, so
-    # only link it where the host has one.
-    if command -v ps >/dev/null 2>&1; then
-        ln -s "$(command -v ps)" "$tmpbin/ps"
-    fi
-}
-
-test_lock_helpers_mkdir_fallback_without_flock() {
-    local tmpdir tmpbin lock_file
-    tmpdir="$(new_tmpdir)"
-    tmpbin="$(new_tmpdir)"
-    lock_file="$tmpdir/test.lock"
-
-    make_spinlock_path "$tmpbin"
-
-    (
-        PATH="$tmpbin"
-        . "$ROOT_DIR/rodin-headless-lib.sh"
-        acquire_rodin_lock "$lock_file"
-        [ "$RODIN_LOCK_KIND" = dir ] || exit 1
-        [ -f "$lock_file.d/pid" ] || exit 1
-        release_rodin_lock
-        [ ! -e "$lock_file.d" ] || exit 1
-    ) || fail "mkdir spinlock should acquire and release without flock"
-}
-
-test_lock_helpers_reclaim_stale_lock() {
-    local tmpdir tmpbin lock_file
-    tmpdir="$(new_tmpdir)"
-    tmpbin="$(new_tmpdir)"
-    lock_file="$tmpdir/test.lock"
-
-    make_spinlock_path "$tmpbin"
-
-    # A held lock whose recorded owner is long dead (out-of-range PID)
-    mkdir -p "$lock_file.d"
-    printf '%s\n' 4194304 > "$lock_file.d/pid"
-
-    (
-        PATH="$tmpbin"
-        . "$ROOT_DIR/rodin-headless-lib.sh"
-        acquire_rodin_lock "$lock_file"
-        [ "$RODIN_LOCK_KIND" = dir ] || exit 1
-        read -r owner < "$lock_file.d/pid"
-        [ "$owner" != 4194304 ] || exit 1
-        release_rodin_lock
-    ) || fail "a stale mkdir spinlock should be reclaimed when its owner is dead"
+    assert_contains "$script" 'seed_equinox_config_area "$RODIN_HOME" "$CONFIG_AREA"' \
+        "the engine should seed a private configuration area"
+    assert_contains "$script" '-configuration "$CONFIG_AREA"' \
+        "the launch should point Equinox at the private configuration area"
+    assert_not_contains "$script" "acquire_rodin_lock" \
+        "a read-only install needs no launch serialization"
+    assert_not_contains "$script" '-nosplash -clean' \
+        "a fresh configuration area has no caches to clean"
 }
 
 test_rodin_headless_wraps_launch_with_timeout() {
@@ -1215,28 +1212,6 @@ test_rodin_headless_supports_macos_layout() {
         "headless script should pass SWT's cocoa first-thread flag"
     assert_contains "$script" 'if [ "$(host_os)" = Darwin ]; then' \
         "the cocoa first-thread flag must stay Darwin-conditional"
-}
-
-test_remove_exact_line_only_removes_matching_bundle_registration() {
-    local tmpdir bundles_file
-    tmpdir="$(new_tmpdir)"
-    bundles_file="$tmpdir/bundles.info"
-
-    cat > "$bundles_file" <<'EOF'
-rodinbuilder.other,1.0.0,plugins/rodinbuilder_other.jar,4,false
-rodinbuilder.run123,1.0.0,plugins/rodinbuilder_run123.jar,4,false
-EOF
-
-    . "$ROOT_DIR/rodin-headless-lib.sh"
-    remove_exact_line "$bundles_file" \
-        "rodinbuilder.run123,1.0.0,plugins/rodinbuilder_run123.jar,4,false"
-
-    assert_contains "$(cat "$bundles_file")" \
-        "rodinbuilder.other,1.0.0,plugins/rodinbuilder_other.jar,4,false" \
-        "bundle cleanup should preserve unrelated registrations"
-    assert_not_contains "$(cat "$bundles_file")" \
-        "rodinbuilder.run123,1.0.0,plugins/rodinbuilder_run123.jar,4,false" \
-        "bundle cleanup should remove only the matching registration"
 }
 
 test_resolve_latest_plugin_paths_use_version_sorting() {
@@ -1813,12 +1788,10 @@ main() {
     test_watchdog_timeout_kills_overrunning_command
     test_watchdog_timeout_zero_duration_disables
     test_run_with_optional_timeout_falls_back_to_gtimeout
-    test_lock_helpers_acquire_and_release
-    test_lock_helpers_mkdir_fallback_without_flock
-    test_lock_helpers_reclaim_stale_lock
+    test_seed_equinox_config_area_builds_throwaway_configuration
+    test_rodin_headless_uses_throwaway_configuration_area
     test_rodin_headless_wraps_launch_with_timeout
     test_rodin_headless_supports_macos_layout
-    test_remove_exact_line_only_removes_matching_bundle_registration
     test_resolve_latest_plugin_paths_use_version_sorting
     test_prob_core_dependency_glob_uses_resolved_directory
     test_rodin_headless_reports_static_check_accuracy

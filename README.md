@@ -23,7 +23,7 @@ The `rodin` wrapper picks a runtime automatically: a native Rodin install if one
 
 The installer downloads Rodin and the ProB CLI, points `rodin.ini` at your JVM, and installs the ProB/SMT/Atelier B Rodin plugins — into `~/.local/share/rodin-headless` by default (override with `--prefix DIR` or `RODIN_PREFIX`). It never uses sudo; system packages (JDK 21+, GTK3, Xvfb, zip/unzip) are reported by `--check-deps` with install hints instead.
 
-On macOS the only prerequisite is a JDK 21+ (e.g. Temurin) — everything else ships with the system, and the engine has built-in fallbacks for the GNU `flock`/`timeout` tools. Apple Silicon needs Rodin 3.10 or later, the first release with arm64 mac builds; until 3.10 final ships, install it with `--rodin-version latest-rc` (3.9 mac builds are x86_64-only and are never selected on arm64).
+On macOS the only prerequisite is a JDK 21+ (e.g. Temurin) — everything else ships with the system, and the engine has a built-in fallback for the GNU `timeout` tool. Apple Silicon needs Rodin 3.10 or later, the first release with arm64 mac builds; until 3.10 final ships, install it with `--rodin-version latest-rc` (3.9 mac builds are x86_64-only and are never selected on arm64).
 
 Native macOS additionally requires a logged-in graphical (Aqua) session — SWT's Cocoa port blocks on WindowServer without one. Over ssh/CI/cron the wrapper detects this and falls back to the container runtime automatically; a forced `RODIN_RUNTIME=native` run fails in seconds with a clear error instead of hanging until the build timeout. Set `RODIN_SKIP_GUI_CHECK=1` to bypass the probe if it ever misdetects your session.
 
@@ -147,13 +147,13 @@ export RODIN_DIR=/opt/rodin MODELS_DIR=./models
 ./rodin-headless.sh model1.zip
 ```
 
-The Rodin install must have the ProB plugin (`de.prob.core`) — a stock Rodin download does not; `./rodin-install.sh` sets one up correctly. When multiple runs share the same Rodin installation, transient plugin installation is serialized so they do not clobber one another.
+The Rodin install must have the ProB plugin (`de.prob.core`) — a stock Rodin download does not; `./rodin-install.sh` sets one up correctly. The installation itself is never written to: each run registers its transient builder plugin in a private temporary Equinox configuration area, so concurrent runs against the same install cannot clobber one another, and even a hard kill leaves the install pristine. (Concurrent runs over the *same* zip still race on repackaging.)
 
 ## What It Does
 
 1. Extracts `.zip` archives into a temporary Rodin workspace
 2. Generates `.project` files where missing
-3. Compiles and installs a temporary OSGi plugin that imports projects and triggers a full workspace build
+3. Compiles a temporary OSGi plugin that imports projects and triggers a full workspace build, registered in a throwaway Equinox configuration area — the Rodin install is never modified
 4. Runs Rodin headlessly via the Eclipse Equinox launcher
 5. Copies all generated/updated files (`.bcm`, `.bcc`, `.bpo`, `.bps`, `.bpr`) back into the original archives
 6. Optionally runs ProB validation or Rodin auto-provers (depending on command)

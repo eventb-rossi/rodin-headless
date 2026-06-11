@@ -202,15 +202,14 @@ check_deps_report() {
     check_dep required unzip "extracts model archives (apt/dnf: unzip)" || missing=1
 
     if [ "$os" = Darwin ]; then
-        # SWT uses Cocoa on macOS, locking uses the built-in spinlock,
-        # and the timeout helper has a pure-shell fallback.
+        # SWT uses Cocoa on macOS, and the timeout helper has a
+        # pure-shell fallback.
         check_dep optional timeout "enforces the build timeout; built-in fallback (brew: coreutils, as gtimeout)"
         printf 'ok       Xvfb not needed on macOS (SWT uses Cocoa)\n'
         printf 'ok       GTK3 not needed on macOS (SWT uses Cocoa)\n'
     else
-        # The lib has pure-shell fallbacks for both, so neither blocks
-        # an install — flock and GNU timeout are just the better tools.
-        check_dep optional flock "serializes Rodin launches; built-in spinlock fallback (part of util-linux)"
+        # The lib has a pure-shell fallback, so a missing GNU timeout
+        # does not block an install — it is just the better tool.
         check_dep optional timeout "enforces the build timeout; built-in fallback (part of coreutils)"
 
         if [ -z "${DISPLAY:-}" ]; then

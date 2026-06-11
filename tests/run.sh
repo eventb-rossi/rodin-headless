@@ -168,6 +168,21 @@ EOF
     chmod +x "$tmpbin/uname"
 }
 
+# Stub launchctl so the GUI-session probe sees the given manager name
+# (Aqua = desktop session, Background = ssh/cron).
+make_launchctl_stub() {
+    local tmpbin="$1" managername="$2"
+
+    cat > "$tmpbin/launchctl" <<EOF
+#!/usr/bin/env bash
+case "\${1:-}" in
+    managername) printf '%s\n' "$managername" ;;
+    *) exit 1 ;;
+esac
+EOF
+    chmod +x "$tmpbin/launchctl"
+}
+
 test_rodin_help_skips_runtime() {
     local tmpbin output marker
     tmpbin="$(new_tmpdir)"
@@ -420,10 +435,13 @@ test_rodin_wrapper_prefers_native_install() {
     : > "$rodin_dir/rodin.ini"
     make_runtime_tripwire_stubs "$tmpbin" "$marker"
 
+    # RODIN_SKIP_GUI_CHECK keeps native selection deterministic when
+    # the suite itself runs without a desktop session (ssh, CI).
     set +e
     output="$(
         cd "$models_dir" \
-            && RODIN_DIR="$rodin_dir" DISPLAY=:0 PATH="$tmpbin:$PATH" \
+            && RODIN_DIR="$rodin_dir" DISPLAY=:0 RODIN_SKIP_GUI_CHECK=1 \
+                PATH="$tmpbin:$PATH" \
                 "$ROOT_DIR/rodin" build 2>&1
     )"
     status=$?
@@ -462,6 +480,71 @@ test_rodin_runtime_docker_overrides_native() {
         "RODIN_RUNTIME=docker should dispatch to the container runtime"
     assert_contains "$args" "<rodin-headless>" \
         "container dispatch should use the rodin-headless image"
+}
+
+test_darwin_gui_session_probe() {
+    local tmpbin
+    tmpbin="$(new_tmpdir)"
+    make_uname_stub "$tmpbin" Darwin arm64
+    make_launchctl_stub "$tmpbin" Background
+
+    if PATH="$tmpbin:$PATH" lib_call darwin_gui_session_ok; then
+        fail "a Background session manager should fail the GUI probe"
+    fi
+    PATH="$tmpbin:$PATH" RODIN_SKIP_GUI_CHECK=1 lib_call darwin_gui_session_ok \
+        || fail "RODIN_SKIP_GUI_CHECK=1 should bypass the GUI probe"
+
+    make_launchctl_stub "$tmpbin" Aqua
+    PATH="$tmpbin:$PATH" lib_call darwin_gui_session_ok \
+        || fail "an Aqua session should pass the GUI probe"
+
+    make_uname_stub "$tmpbin" Linux x86_64
+    PATH="$tmpbin:$PATH" lib_call darwin_gui_session_ok \
+        || fail "non-Darwin hosts should always pass the GUI probe"
+}
+
+test_rodin_wrapper_falls_back_without_gui_session() {
+    local tmpbin rodin_dir args_file args output
+    tmpbin="$(new_tmpdir)"
+    rodin_dir="$(new_tmpdir)/rodin"
+    args_file="$tmpbin/docker.args"
+
+    mkdir -p "$rodin_dir"
+    : > "$rodin_dir/rodin.ini"
+    make_docker_args_stub "$tmpbin"
+    make_uname_stub "$tmpbin" Darwin arm64
+    make_launchctl_stub "$tmpbin" Background
+
+    output="$(
+        RODIN_TEST_ARGS="$args_file" \
+        RODIN_DIR="$rodin_dir" \
+        PATH="$tmpbin:$PATH" \
+            "$ROOT_DIR/rodin" build model.zip 2>&1
+    )"
+
+    assert_contains "$output" "no graphical session" \
+        "the wrapper should say why the native install is skipped"
+    args="$(cat "$args_file")"
+    assert_contains "$args" "<run>" \
+        "a GUI-less macOS host should fall back to the container runtime"
+}
+
+test_rodin_headless_fast_fails_without_gui_session() {
+    local tmpbin tmpdir rodin_dir models_dir
+    tmpbin="$(new_tmpdir)"
+    tmpdir="$(new_tmpdir)"
+    rodin_dir="$tmpdir/rodin"
+    models_dir="$tmpdir/models"
+    mkdir -p "$rodin_dir/plugins/de.prob.core_1.0.0" "$models_dir"
+    : > "$models_dir/model.zip"
+
+    make_uname_stub "$tmpbin" Darwin arm64
+    make_launchctl_stub "$tmpbin" Background
+
+    assert_fails_with "needs a logged-in graphical (Aqua) session" \
+        env DISPLAY=:0 RODIN_DIR="$rodin_dir" MODELS_DIR="$models_dir" \
+            PATH="$tmpbin:$PATH" \
+            "$ROOT_DIR/rodin-headless.sh" model.zip
 }
 
 test_default_rodin_prefix_requires_home_or_rodin_prefix() {
@@ -575,7 +658,8 @@ test_rodin_wrapper_detects_mac_app_bundle_install() {
     set +e
     output="$(
         cd "$models_dir" \
-            && RODIN_DIR="$rodin_dir" DISPLAY=:0 PATH="$tmpbin:$PATH" \
+            && RODIN_DIR="$rodin_dir" DISPLAY=:0 RODIN_SKIP_GUI_CHECK=1 \
+                PATH="$tmpbin:$PATH" \
                 "$ROOT_DIR/rodin" build 2>&1
     )"
     status=$?
@@ -1485,6 +1569,9 @@ main() {
     test_rodin_wrapper_prefers_native_install
     test_rodin_wrapper_detects_mac_app_bundle_install
     test_rodin_runtime_docker_overrides_native
+    test_darwin_gui_session_probe
+    test_rodin_wrapper_falls_back_without_gui_session
+    test_rodin_headless_fast_fails_without_gui_session
     test_default_rodin_prefix_requires_home_or_rodin_prefix
     test_rodin_wrapper_survives_underivable_prefix
     test_rodin_headless_rejects_missing_archives

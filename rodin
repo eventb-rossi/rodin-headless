@@ -70,7 +70,20 @@ RUNTIME=""
 case "$RODIN_RUNTIME" in
     auto|native)
         if NATIVE_RODIN_DIR="$(find_native_rodin)"; then
-            run_native "$NATIVE_RODIN_DIR" "$@"
+            # In auto mode a GUI-less macOS host (ssh, CI) skips the
+            # native install instead of fast-failing in the engine —
+            # the container runtime works without a desktop session.
+            # Forced native runs proceed and hit the engine's check.
+            if darwin_gui_session_ok; then
+                # Session just verified — spare the engine its
+                # duplicate probe.
+                RODIN_SKIP_GUI_CHECK=1 run_native "$NATIVE_RODIN_DIR" "$@"
+            elif [ "$RODIN_RUNTIME" = native ]; then
+                run_native "$NATIVE_RODIN_DIR" "$@"
+            else
+                echo "Note: skipping native Rodin at $NATIVE_RODIN_DIR (no graphical session for SWT); using a container" >&2
+                echo "      (RODIN_RUNTIME=native forces the native install, RODIN_SKIP_GUI_CHECK=1 skips this probe)" >&2
+            fi
         fi
         if [ "$RODIN_RUNTIME" = native ]; then
             echo "Error: no native Rodin install found" >&2

@@ -25,6 +25,8 @@ The installer downloads Rodin and the ProB CLI, points `rodin.ini` at your JVM, 
 
 On macOS the only prerequisite is a JDK 21+ (e.g. Temurin) — everything else ships with the system, and the engine has built-in fallbacks for the GNU `flock`/`timeout` tools. Apple Silicon needs Rodin 3.10 or later, the first release with arm64 mac builds; until 3.10 final ships, install it with `--rodin-version latest-rc` (3.9 mac builds are x86_64-only and are never selected on arm64).
 
+Native macOS additionally requires a logged-in graphical (Aqua) session — SWT's Cocoa port blocks on WindowServer without one. Over ssh/CI/cron the wrapper detects this and falls back to the container runtime automatically; a forced `RODIN_RUNTIME=native` run fails in seconds with a clear error instead of hanging until the build timeout. Set `RODIN_SKIP_GUI_CHECK=1` to bypass the probe if it ever misdetects your session.
+
 ```bash
 ./rodin-install.sh [--prefix DIR] [--only rodin|prob] [--force]
                    [--rodin-version V] [--rodin-tarball F] [--prob-version V]

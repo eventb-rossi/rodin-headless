@@ -300,6 +300,20 @@ release_rodin_lock() {
     RODIN_LOCK_PATH=""
 }
 
+# SWT's Cocoa port talks to WindowServer, which only a logged-in
+# graphical (Aqua) session provides; without one the Rodin launch
+# blocks until the build timeout fires. launchctl reports the session
+# kind as the manager name: Aqua on a desktop, Background over
+# ssh/cron. RODIN_SKIP_GUI_CHECK=1 bypasses the probe in case it ever
+# misdetects a launchable session.
+darwin_gui_session_ok() {
+    [ "$(host_os)" = Darwin ] || return 0
+    if [ "${RODIN_SKIP_GUI_CHECK:-}" = 1 ]; then
+        return 0
+    fi
+    [ "$(launchctl managername 2>/dev/null)" = Aqua ]
+}
+
 # uname-guarded so dependency reporting keeps working on the minimal
 # PATHs the test suite constructs.
 host_os() {

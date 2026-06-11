@@ -133,6 +133,15 @@ if [ -z "$PROB_CORE_DIR" ]; then
     exit 1
 fi
 
+# Fail in seconds instead of hanging for the whole build timeout: the
+# SWT launch in step 3 blocks on WindowServer when macOS has no
+# logged-in graphical session (ssh, CI, cron).
+if ! darwin_gui_session_ok; then
+    echo "ERROR: native Rodin on macOS needs a logged-in graphical (Aqua) session" >&2
+    echo "Run from a desktop session, run via the ./rodin wrapper (it falls back to a container), or set RODIN_SKIP_GUI_CHECK=1 to try anyway" >&2
+    exit 1
+fi
+
 WORKSPACE=$(mktemp -d)
 PLUGIN_DIR=$(mktemp -d)
 BUNDLES_INFO="$RODIN_HOME/configuration/org.eclipse.equinox.simpleconfigurator/bundles.info"

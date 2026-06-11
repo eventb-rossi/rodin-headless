@@ -69,6 +69,12 @@ RODIN_RUNTIME=native ./rodin check model.zip   # fail if no native install
 
 In native mode the wrapper exports `RODIN_DIR`, uses the current directory as the models directory, and puts the sibling `prob/` directory on `PATH` for `probcli`.
 
+### Unattended / batch use
+
+For SSH sessions, CI, cron, and other non-interactive batch runs, the container runtime is the supported path: it brings its own virtual display (Xvfb) and needs no desktop session. Native Linux works unattended too when Xvfb is installed. Native macOS does **not**: SWT's Cocoa port requires a logged-in graphical (Aqua) session, so native runs only work from a real desktop session — see the macOS notes below.
+
+On Apple Silicon this means there is currently no fast unattended path: the container is emulated x86_64 (slow), and the native arm64 build is desktop-session-bound. See [Apple Silicon expectations](#apple-silicon-expectations).
+
 ### Build models
 
 ```bash
@@ -196,6 +202,22 @@ podman build --platform linux/amd64 -t rodin-headless .
 
 The `./rodin` wrapper applies this platform flag automatically when it builds
 and runs the image on macOS ARM64.
+
+### Apple Silicon expectations
+
+There is no fast headless path on Apple Silicon today, and it is worth knowing
+before burning time on it:
+
+- The container runs Rodin's and ProB's Linux x86_64 binaries under emulation
+  (Rosetta/QEMU). It works unattended, but expect builds to be several times
+  slower than native.
+- The native arm64 build (Rodin 3.10+) is fast, but only runs from a
+  logged-in graphical session — it is not usable over SSH or in CI.
+
+This is not fixable in this repo until Rodin ships arm64 Linux builds. If you
+need fast unattended runs from a Mac, run the corpus on an x86_64 Linux host
+(a future `RODIN_RUNTIME=ssh`-style remote runner may automate that; today it
+is a manual step).
 
 The `rodin-version.sh` helper script can also be used standalone to query the highest available stable or RC version:
 

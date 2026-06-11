@@ -231,6 +231,8 @@ The `rodin-version.sh` helper script can also be used standalone to query the hi
 
 Input `.zip` files should contain an Event-B project — `.bum` (machine) and/or `.buc` (context) files, optionally with a `.project` descriptor. Archives can have a single top-level directory or be flat.
 
+Exactly **one project per archive**: when a zip contains several project roots, only the first is built and written back (a warning is printed). Ship one zip per project instead.
+
 The script resolves the project name using (in priority order):
 1. `org.eventb.core.source` references in existing `.bcm` files
 2. `<name>` element in `.project`

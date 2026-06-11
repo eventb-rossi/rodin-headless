@@ -162,11 +162,23 @@ for zip_index in "${!ZIPS[@]}"; do
     tmpdir=$(mktemp -d)
     unzip -q "$MODELS_DIR/$zip" -d "$tmpdir"
 
-    subdirs=$(find "$tmpdir" -mindepth 1 -maxdepth 1 -type d | head -1)
-    if [ -n "$subdirs" ]; then
-        srcdir="$subdirs"
+    # One walk serves both the root count and the source directory.
+    # Extracting the first *project* root (same sort order step 4's
+    # repackaging uses) keeps extraction and write-back pointed at the
+    # same directory, and skips non-project clutter (docs/, media/)
+    # that a first-top-level-dir heuristic could pick up instead of
+    # the model. BSD wc pads the count with leading spaces.
+    archive_roots=$(find_archive_project_roots "$tmpdir")
+    if [ -n "$archive_roots" ]; then
+        project_roots=$(printf '%s\n' "$archive_roots" | wc -l | tr -d ' ')
+        srcdir=$(printf '%s\n' "$archive_roots" | head -1)
     else
-        srcdir="$tmpdir"
+        # No Event-B sources or .project anywhere: keep the legacy
+        # top-level-directory fallback so the failure surfaces later
+        # with a project name attached.
+        project_roots=0
+        srcdir=$(find "$tmpdir" -mindepth 1 -maxdepth 1 -type d | head -1)
+        [ -n "$srcdir" ] || srcdir="$tmpdir"
     fi
 
     # Determine project name for workspace directory.
@@ -182,8 +194,8 @@ for zip_index in "${!ZIPS[@]}"; do
     fi
     # Fall back if empty or would collide with an existing workspace project
     if [ -z "$projname" ] || [ -d "$WORKSPACE/$projname" ]; then
-        if [ -n "$subdirs" ]; then
-            projname=$(basename "$subdirs")
+        if [ "$srcdir" != "$tmpdir" ]; then
+            projname=$(basename "$srcdir")
         else
             projname="$m"
         fi
@@ -216,6 +228,12 @@ EOF
     fi
     ZIP_PROJECTS[$zip_index]="$projname"
     echo "  $m → $projname"
+    # One project per archive: extraction keeps only the first top-level
+    # directory and repackaging writes back a single project root, so
+    # extra projects would be dropped silently without this notice.
+    if [ "$project_roots" -gt 1 ]; then
+        echo "  WARNING: $zip contains $project_roots project roots; only '$projname' is built and repackaged" >&2
+    fi
 done
 echo
 

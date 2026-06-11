@@ -59,12 +59,24 @@ find_prob_plugin() {
     resolve_latest_dir "$home/plugins" de.prob.core
 }
 
-find_archive_project_root() {
+# All directories under an unpacked archive that look like Event-B
+# project roots (sources or .project metadata), one per line. macOS
+# Finder zips carry AppleDouble copies (__MACOSX/…/._M1.bum) that must
+# not count as roots — or worse, win the sort and become the
+# repackaging target.
+find_archive_project_roots() {
     local archive_root="$1"
 
-    find "$archive_root" \
-        \( -name "*.bum" -o -name "*.buc" -o -name ".project" \) \
-        -exec dirname {} \; | sort -u | head -1
+    find "$archive_root" -name __MACOSX -prune -o \
+        \( \( -name "*.bum" -o -name "*.buc" -o -name ".project" \) \
+            ! -name "._*" \) \
+        -exec dirname {} \; | sort -u
+}
+
+# The toolchain processes one project per archive; this picks the
+# canonical one. Extraction warns when an archive holds more.
+find_archive_project_root() {
+    find_archive_project_roots "$1" | head -1
 }
 
 run_with_filtered_output() {

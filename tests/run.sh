@@ -623,6 +623,70 @@ test_find_archive_project_root_falls_back_to_project_metadata() {
         "archive root detection should fall back to .project when sources are absent"
 }
 
+test_find_archive_project_roots_lists_every_project() {
+    local tmpdir roots
+    tmpdir="$(new_tmpdir)"
+    mkdir -p "$tmpdir/alpha" "$tmpdir/beta"
+    : > "$tmpdir/alpha/M1.bum"
+    : > "$tmpdir/beta/.project"
+
+    roots="$(lib_call find_archive_project_roots "$tmpdir")"
+
+    assert_contains "$roots" "$tmpdir/alpha" \
+        "project root listing should include source-based roots"
+    assert_contains "$roots" "$tmpdir/beta" \
+        "project root listing should include metadata-based roots"
+    assert_eq "$tmpdir/alpha" "$(lib_call find_archive_project_root "$tmpdir")" \
+        "the canonical project root should stay the first listed one"
+
+    # Finder zips carry AppleDouble copies under __MACOSX, which sorts
+    # before real project dirs and must never become the canonical root
+    mkdir -p "$tmpdir/__MACOSX/alpha"
+    : > "$tmpdir/__MACOSX/alpha/._M1.bum"
+    roots="$(lib_call find_archive_project_roots "$tmpdir")"
+    assert_not_contains "$roots" "__MACOSX" \
+        "AppleDouble resource forks must not count as project roots"
+    assert_eq "$tmpdir/alpha" "$(lib_call find_archive_project_root "$tmpdir")" \
+        "the canonical root must not shift to the AppleDouble directory"
+}
+
+test_rodin_headless_extracts_the_project_root_dir() {
+    local tmpdir rodin_dir models_dir staging output
+    tmpdir="$(new_tmpdir)"
+    rodin_dir="$tmpdir/rodin"
+    models_dir="$tmpdir/models"
+    staging="$tmpdir/staging"
+    mkdir -p "$rodin_dir/plugins/de.prob.core_1.0.0" "$models_dir" \
+        "$staging/docs" "$staging/proj"
+    : > "$staging/docs/readme.txt"
+    : > "$staging/proj/M1.bum"
+    (cd "$staging" && zip -q -r "$models_dir/twin.zip" .)
+
+    # The run dies later (no real Rodin install) — only step 1 matters.
+    set +e
+    output="$(
+        env DISPLAY=:0 RODIN_SKIP_GUI_CHECK=1 \
+            RODIN_DIR="$rodin_dir" MODELS_DIR="$models_dir" \
+            "$ROOT_DIR/rodin-headless.sh" twin.zip 2>&1
+    )"
+    set -e
+
+    assert_contains "$output" "twin → proj" \
+        "extraction should pick the directory holding Event-B sources, not the first top-level dir"
+    assert_not_contains "$output" "WARNING: twin.zip contains" \
+        "a single project root must not trigger the multi-project warning"
+}
+
+test_rodin_headless_warns_on_multi_project_archives() {
+    local script
+    script="$(cat "$ROOT_DIR/rodin-headless.sh")"
+
+    assert_contains "$script" "project roots; only" \
+        "extraction should warn when an archive holds more than one project"
+    assert_contains "$script" 'find_archive_project_roots "$tmpdir"' \
+        "the warning should count roots with the shared lib helper"
+}
+
 test_run_with_filtered_output_preserves_failure_status() {
     local tmpdir command output status
     tmpdir="$(new_tmpdir)"
@@ -1428,6 +1492,9 @@ main() {
     test_resolve_rodin_home_handles_layouts
     test_find_archive_project_root_supports_context_only_models
     test_find_archive_project_root_falls_back_to_project_metadata
+    test_find_archive_project_roots_lists_every_project
+    test_rodin_headless_extracts_the_project_root_dir
+    test_rodin_headless_warns_on_multi_project_archives
     test_run_with_filtered_output_preserves_failure_status
     test_run_with_filtered_output_preserves_success_status
     test_run_with_optional_timeout_preserves_success_status

@@ -25,6 +25,11 @@ Commands:
   probcli [args...]              Run probcli directly
   help                           Show this help
 
+Options (anywhere after the command word):
+  --strict                       Exit non-zero when any component fails
+                                 Rodin's static check or was never checked
+                                 (multi-project archives are rejected)
+
 Environment:
   RODIN_BUILD_TIMEOUT            Rodin build timeout (default: 60m; off disables)
   RODIN_BUILD_TIMEOUT_KILL_AFTER Grace period after timeout (default: 30s)
@@ -32,6 +37,7 @@ Environment:
 Examples:
   ./rodin model.zip
   ./rodin build model.zip
+  ./rodin build --strict model.zip
   ./rodin check model.zip
   ./rodin prove model.zip
   ./rodin validate model.zip

@@ -13,11 +13,12 @@
 # - Rodin IDE installed (Eclipse-based)
 # - Java 21+ (for compiling the OSGi plugin)
 #
-# Usage: ./rodin-headless.sh [--mode MODE] [<rodin-dir> <models-dir>] [model1.zip ...]
+# Usage: ./rodin-headless.sh [--mode MODE] [--strict] [<rodin-dir> <models-dir>] [model1.zip ...]
 #   If no specific models are listed, all .zip files in models-dir are processed.
 #   Paths can also be set via RODIN_DIR and MODELS_DIR environment variables.
 #   RODIN_BUILD_TIMEOUT defaults to 60m; set to off to disable.
-#   MODE: build (default), check, prove, validate
+#   MODE: build (default), check, prove, validate, autoprove
+#   --strict: exit non-zero when any component fails the static check
 #
 # Examples:
 #   ./rodin-headless.sh /home/work/bin/rodin . evbt_bridge.zip evbt_elevator.zip
@@ -30,12 +31,24 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # Shared shell helpers used by the script and regression tests.
 . "$SCRIPT_DIR/rodin-headless-lib.sh"
 
-# Parse --mode flag
+# Parse --mode/--strict flags; they may appear anywhere among the
+# positional arguments, and an unknown option fails fast instead of
+# falling through to basename as a bogus archive name.
 BUILD_MODE="build"
-if [ "${1:-}" = "--mode" ]; then
-    BUILD_MODE="${2:-build}"
-    shift 2
-fi
+STRICT_MODE=false
+POSITIONAL_ARGS=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --mode)   BUILD_MODE="${2:-build}"; shift 2 ;;
+        --strict) STRICT_MODE=true; shift ;;
+        --*)
+            echo "ERROR: unknown option '$1'" >&2
+            exit 1
+            ;;
+        *)        POSITIONAL_ARGS+=("$1"); shift ;;
+    esac
+done
+set -- ${POSITIONAL_ARGS[@]+"${POSITIONAL_ARGS[@]}"}
 
 # Auto-start virtual framebuffer if no display is available (e.g., Docker)
 if [ -z "${DISPLAY:-}" ] && command -v Xvfb >/dev/null 2>&1; then
@@ -76,7 +89,7 @@ else
 fi
 
 if [ -z "$RODIN_DIR" ] || [ -z "$MODELS_DIR" ]; then
-    echo "Usage: $0 [<rodin-dir> <models-dir>] [model1.zip ...]" >&2
+    echo "Usage: $0 [--mode MODE] [--strict] [<rodin-dir> <models-dir>] [model1.zip ...]" >&2
     echo "  Or set RODIN_DIR and MODELS_DIR environment variables." >&2
     exit 1
 fi
@@ -237,10 +250,16 @@ EOF
     fi
     ZIP_PROJECTS[$zip_index]="$projname"
     echo "  $m → $projname"
-    # One project per archive: extraction keeps only the first top-level
-    # directory and repackaging writes back a single project root, so
-    # extra projects would be dropped silently without this notice.
+    # One project per archive: extraction keeps a single project root
+    # and repackaging writes a single one back, so extra projects would
+    # be dropped silently without this notice. Strict mode promises a
+    # non-zero exit for anything that never got checked — dropped
+    # projects included — so there it is fatal.
     if [ "$project_roots" -gt 1 ]; then
+        if [ "$STRICT_MODE" = true ]; then
+            echo "ERROR: $zip contains $project_roots project roots; strict mode refuses to drop the extras (one project per archive)" >&2
+            exit 1
+        fi
         echo "  WARNING: $zip contains $project_roots project roots; only '$projname' is built and repackaged" >&2
     fi
 done
@@ -303,6 +322,16 @@ public class HeadlessBuilder implements IApplication {
         workspace.build(IncrementalProjectBuilder.FULL_BUILD, new NullProgressMonitor());
         System.out.println("Build complete.");
 
+        // Launch success says nothing about the model; surface the
+        // static checker's per-component verdict, and in strict mode
+        // fail before autoprove/ProB can pile errors on a model that
+        // never statically checked.
+        boolean scAccurate = reportStaticCheck(root);
+        if (Boolean.getBoolean("rodinbuilder.strict") && !scAccurate) {
+            System.out.println("\nStrict mode: failing due to static check errors.");
+            return Integer.valueOf(1);
+        }
+
         String mode = System.getProperty("rodinbuilder.mode", "build");
         if ("autoprove".equals(mode)) {
             boolean ok = runAutoProver(root);
@@ -313,6 +342,67 @@ public class HeadlessBuilder implements IApplication {
         }
 
         return IApplication.EXIT_OK;
+    }
+
+    // The static checker records where it dropped or changed elements
+    // as org.eventb.core.accurate="false" attributes in the .bcc/.bcm
+    // output — the verdict consumers otherwise have to grep out of the
+    // repackaged archives.
+    private boolean reportStaticCheck(IWorkspaceRoot root) throws Exception {
+        boolean allAccurate = true;
+        System.out.println("\n=== Static check results ===");
+        for (IProject project : root.getProjects()) {
+            if (!project.isOpen()) continue;
+            IRodinProject rp = RodinCore.valueOf(project);
+            for (IMachineRoot m : rp.getRootElementsOfType(IMachineRoot.ELEMENT_TYPE))
+                allAccurate &= reportComponent(m.getComponentName(), m.getSCMachineRoot());
+            for (IContextRoot c : rp.getRootElementsOfType(IContextRoot.ELEMENT_TYPE))
+                allAccurate &= reportComponent(c.getComponentName(), c.getSCContextRoot());
+        }
+        System.out.println(allAccurate
+            ? "Static check: ALL COMPONENTS ACCURATE"
+            : "Static check: ERRORS DETECTED");
+        return allAccurate;
+    }
+
+    // Accuracy is recorded per element, not just on the file root: a
+    // filtered action marks its event inaccurate while the root stays
+    // accurate. Walk the whole tree and name the first lossy element.
+    private String findInaccurate(IRodinElement element) throws Exception {
+        if (element instanceof IAccuracyElement
+                && !((IAccuracyElement) element).isAccurate()) {
+            return element instanceof ILabeledElement
+                ? ((ILabeledElement) element).getLabel()
+                : element.getElementName();
+        }
+        if (element instanceof IParent) {
+            for (IRodinElement child : ((IParent) element).getChildren()) {
+                String hit = findInaccurate(child);
+                if (hit != null) return hit;
+            }
+        }
+        return null;
+    }
+
+    // A missing SC root counts as a failure: the component was never
+    // successfully checked, which is exactly what strict mode is for.
+    private boolean reportComponent(String name, IInternalElement scRoot) {
+        try {
+            if (!scRoot.exists()) {
+                System.out.println("  " + name + ": NOT CHECKED (no static-check output)");
+                return false;
+            }
+            String inaccurate = findInaccurate(scRoot);
+            if (inaccurate == null) {
+                System.out.println("  " + name + ": OK");
+                return true;
+            }
+            System.out.println("  " + name + ": STATIC CHECK ERRORS (at " + inaccurate + ")");
+            return false;
+        } catch (Exception e) {
+            System.err.println("  " + name + ": accuracy unreadable: " + e.getMessage());
+            return false;
+        }
     }
 
     private boolean runAutoProver(IWorkspaceRoot root) throws Exception {
@@ -536,12 +626,20 @@ fi
 
 # Build the Rodin launch command (prefer equinox launcher JAR over native binary)
 LAUNCHER_JAR=$(resolve_latest_jar "$RODIN_PLUGINS" org.eclipse.equinox.launcher)
+RODIN_VMARGS=()
 if [ -n "$LAUNCHER_JAR" ]; then
-    RODIN_CMD=(java "-Drodinbuilder.mode=$BUILD_MODE" "${JDK_XML_RELAXED_OPTS[@]}"
+    RODIN_CMD=(java "-Drodinbuilder.mode=$BUILD_MODE" "-Drodinbuilder.strict=$STRICT_MODE"
+        "${JDK_XML_RELAXED_OPTS[@]}"
         ${JAVA_PLATFORM_OPTS[@]+"${JAVA_PLATFORM_OPTS[@]}"}
         -jar "$LAUNCHER_JAR" -install "$RODIN_HOME")
 else
     RODIN_CMD=("$(resolve_rodin_launcher "$RODIN_DIR" || printf '%s\n' "$RODIN_DIR/rodin")")
+    # The native launcher takes JVM options only after a trailing
+    # -vmargs; appendVmargs keeps rodin.ini's own vmargs (heap size)
+    # intact instead of replacing them.
+    RODIN_VMARGS=(--launcher.appendVmargs -vmargs
+        "${JDK_XML_RELAXED_OPTS[@]}"
+        "-Drodinbuilder.mode=$BUILD_MODE" "-Drodinbuilder.strict=$STRICT_MODE")
 fi
 
 echo "Rodin build timeout: $RODIN_BUILD_TIMEOUT"
@@ -553,7 +651,8 @@ run_with_filtered_output \
     -nosplash -clean \
     -application "$APPLICATION_ID" \
     -data "$WORKSPACE" \
-    -consolelog || LAUNCH_STATUS=$?
+    -consolelog \
+    ${RODIN_VMARGS[@]+"${RODIN_VMARGS[@]}"} || LAUNCH_STATUS=$?
 echo
 
 case "$LAUNCH_STATUS" in

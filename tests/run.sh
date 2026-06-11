@@ -194,6 +194,8 @@ test_rodin_help_skips_runtime() {
 
     assert_contains "$output" "Usage: ./rodin <command> [args...]" \
         "rodin help should print usage text"
+    assert_contains "$output" "--strict" \
+        "rodin help should document the strict flag"
     if [ -e "$marker" ]; then
         fail "rodin help should not invoke docker or podman"
     fi
@@ -1279,6 +1281,85 @@ test_prob_core_dependency_glob_uses_resolved_directory() {
         "ProB dependency discovery should join the resolved directory with /lib/dependencies"
 }
 
+test_rodin_headless_reports_static_check_accuracy() {
+    local script
+    script="$(cat "$ROOT_DIR/rodin-headless.sh")"
+
+    assert_contains "$script" "getSCMachineRoot()" \
+        "the builder should inspect machine static-check roots"
+    assert_contains "$script" "getSCContextRoot()" \
+        "the builder should inspect context static-check roots"
+    assert_contains "$script" "isAccurate()" \
+        "the builder should read the static checker's accuracy verdict"
+    assert_contains "$script" '"-Drodinbuilder.strict=$STRICT_MODE"' \
+        "the launch should thread the strict flag into the JVM"
+    assert_contains "$script" '--launcher.appendVmargs' \
+        "the native-binary launch should append vmargs instead of replacing rodin.ini's"
+    # The trailing ')' pins the RODIN_VMARGS array specifically: the
+    # native-binary branch must keep passing the mode property (it was
+    # silently dropped before this assertion existed).
+    assert_contains "$script" '"-Drodinbuilder.mode=$BUILD_MODE" "-Drodinbuilder.strict=$STRICT_MODE")' \
+        "the native-binary vmargs must carry the mode property too"
+}
+
+test_rodin_headless_parses_strict_flag() {
+    local tmpdir rodin_dir models_dir
+    tmpdir="$(new_tmpdir)"
+    rodin_dir="$tmpdir/rodin"
+    models_dir="$tmpdir/models"
+    mkdir -p "$rodin_dir" "$models_dir"
+
+    # Both flags are consumed in either order, reaching the
+    # archive-selection error rather than tripping path resolution.
+    assert_fails_with "ERROR: No .zip archives found in $models_dir" \
+        env DISPLAY=:0 RODIN_DIR="$rodin_dir" MODELS_DIR="$models_dir" \
+            "$ROOT_DIR/rodin-headless.sh" --strict --mode check
+    assert_fails_with "ERROR: No .zip archives found in $models_dir" \
+        env DISPLAY=:0 RODIN_DIR="$rodin_dir" MODELS_DIR="$models_dir" \
+            "$ROOT_DIR/rodin-headless.sh" --mode check --strict
+
+    # Flags may also follow archive names, and unknown options fail by
+    # name instead of falling through to basename as a bogus archive.
+    assert_fails_with "ERROR: None of the requested archives were found in $models_dir" \
+        env DISPLAY=:0 RODIN_DIR="$rodin_dir" MODELS_DIR="$models_dir" \
+            "$ROOT_DIR/rodin-headless.sh" missing.zip --strict
+    assert_fails_with "unknown option '--bogus'" \
+        env DISPLAY=:0 RODIN_DIR="$rodin_dir" MODELS_DIR="$models_dir" \
+            "$ROOT_DIR/rodin-headless.sh" --bogus model.zip
+}
+
+test_rodin_headless_strict_rejects_multi_project_archives() {
+    local tmpdir rodin_dir models_dir staging output
+    tmpdir="$(new_tmpdir)"
+    rodin_dir="$tmpdir/rodin"
+    models_dir="$tmpdir/models"
+    staging="$tmpdir/staging"
+    mkdir -p "$rodin_dir/plugins/de.prob.core_1.0.0" "$models_dir" \
+        "$staging/alpha" "$staging/beta"
+    : > "$staging/alpha/M1.bum"
+    : > "$staging/beta/M2.bum"
+    (cd "$staging" && zip -q -r "$models_dir/multi.zip" .)
+
+    # Strict promises a non-zero exit for anything never checked;
+    # silently dropped projects are exactly that.
+    assert_fails_with "strict mode refuses to drop" \
+        env DISPLAY=:0 RODIN_SKIP_GUI_CHECK=1 \
+            RODIN_DIR="$rodin_dir" MODELS_DIR="$models_dir" \
+            "$ROOT_DIR/rodin-headless.sh" --strict multi.zip
+
+    # Without strict the drop is loud but not fatal (the run dies later
+    # for unrelated reasons — no real Rodin install).
+    set +e
+    output="$(
+        env DISPLAY=:0 RODIN_SKIP_GUI_CHECK=1 \
+            RODIN_DIR="$rodin_dir" MODELS_DIR="$models_dir" \
+            "$ROOT_DIR/rodin-headless.sh" multi.zip 2>&1
+    )"
+    set -e
+    assert_contains "$output" "WARNING: multi.zip contains 2 project roots" \
+        "non-strict runs should warn about dropped projects"
+}
+
 test_validate_deadlock_check_uses_eventb_true_ast() {
     local script
     script="$(cat "$ROOT_DIR/rodin-headless.sh")"
@@ -1740,6 +1821,9 @@ main() {
     test_remove_exact_line_only_removes_matching_bundle_registration
     test_resolve_latest_plugin_paths_use_version_sorting
     test_prob_core_dependency_glob_uses_resolved_directory
+    test_rodin_headless_reports_static_check_accuracy
+    test_rodin_headless_parses_strict_flag
+    test_rodin_headless_strict_rejects_multi_project_archives
     test_validate_deadlock_check_uses_eventb_true_ast
     test_installer_check_deps_works_without_home
     test_installer_check_deps_reports_missing_tools

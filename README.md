@@ -54,6 +54,12 @@ Re-running is safe: completed phases are skipped unless `--force` is given.
 If no command is given, `build` is assumed.
 `./rodin help` is handled locally and does not require a native install, Docker, podman, or a prebuilt image.
 
+Every model command prints a per-component static-check summary after the build and accepts `--strict` (anywhere after the command word): with it, the run exits non-zero when any component fails Rodin's static check — or was never checked, which includes archives carrying more than one project (the extras would be dropped unchecked, so strict rejects the archive) — instead of the exit code only reflecting whether Rodin launched. Without `--strict` the summary is informational and consumers can keep parsing `org.eventb.core.accurate` from the repackaged `.bcm`/`.bcc` files.
+
+```bash
+./rodin build --strict model.zip   # exit 1 if the model does not statically check
+```
+
 ## Runtime Selection
 
 The wrapper resolves the runtime in this order (`RODIN_RUNTIME=auto`, the default):
@@ -243,7 +249,7 @@ The `rodin-version.sh` helper script can also be used standalone to query the hi
 
 Input `.zip` files should contain an Event-B project — `.bum` (machine) and/or `.buc` (context) files, optionally with a `.project` descriptor. Archives can have a single top-level directory or be flat.
 
-Exactly **one project per archive**: when a zip contains several project roots, only the first is built and written back (a warning is printed). Ship one zip per project instead.
+Exactly **one project per archive**: when a zip contains several project roots, only the first is built and written back (a warning is printed, and `--strict` rejects the archive outright). Ship one zip per project instead.
 
 The script resolves the project name using (in priority order):
 1. `org.eventb.core.source` references in existing `.bcm` files

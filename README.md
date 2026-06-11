@@ -121,6 +121,8 @@ runtimes; in Docker mode the wrapper forwards them into the container.
 
 In Docker mode the `rodin` wrapper auto-detects SELinux and applies the `:Z` volume flag. Docker and podman are both supported.
 
+On macOS, podman only bind-mounts a fixed set of host prefixes into its VM (typically `/Users`, `/private`, `/var/folders` — not `/Volumes`). The wrapper checks this up front and fails with the exact `podman machine set --volume` command to run instead of letting the runtime die with an opaque `statfs ... no such file or directory`. Docker Desktop shares `/Volumes` by default and needs no such step.
+
 ### Direct engine invocation
 
 The core engine can be run directly against any Rodin install, without the wrapper:

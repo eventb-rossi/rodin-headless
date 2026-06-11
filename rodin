@@ -148,6 +148,67 @@ image_needs_build() {
     return 1
 }
 
+# The host prefixes the default podman machine shares with its VM, one
+# per line. podman 5.x dropped the Mounts field from machine inspect
+# but records them in the machine's config file; 4.x lacks ConfigDir
+# and answers the inspect template instead. The config file comes
+# first so modern podman pays a single inspect.
+podman_machine_mounts() {
+    local config_file
+
+    if config_file="$("$RUNTIME" machine inspect \
+        --format '{{.ConfigDir.Path}}/{{.Name}}.json' 2>/dev/null)" \
+        && [ -f "$config_file" ]; then
+        # The file is single-line JSON; grep -o picks up every mount
+        # where a line-oriented sed would only see the last one.
+        grep -o '"Source"[[:space:]]*:[[:space:]]*"[^"]*"' "$config_file" \
+            | sed 's/.*"\([^"]*\)"$/\1/'
+        return 0
+    fi
+
+    "$RUNTIME" machine inspect \
+        --format '{{range .Mounts}}{{.Source}}{{"\n"}}{{end}}' 2>/dev/null
+}
+
+# Podman on macOS runs containers in a VM that bind-mounts only a fixed
+# set of host prefixes (typically /Users, /private, /var/folders); a
+# cwd outside them (e.g. /Volumes/...) only surfaces as an opaque
+# "statfs ... no such file or directory" from the runtime. Check up
+# front and explain the fix. Docker Desktop shares /Volumes by default,
+# so only podman is checked; a podman whose mounts cannot be listed
+# skips the check rather than misfiring.
+check_podman_machine_shares_cwd() {
+    local mounts cwd top src
+
+    [ "$(host_os)" = Darwin ] || return 0
+    [ "$RUNTIME" = podman ] || return 0
+    mounts="$(podman_machine_mounts)" || return 0
+    [ -n "$mounts" ] || return 0
+
+    # Physical path: macOS /tmp and /var are symlinks into /private,
+    # which IS shared — the logical pwd would be falsely rejected.
+    cwd="$(pwd -P)"
+    # The heredoc feeds the loop in this shell, so a match can return
+    # from the function directly.
+    while IFS= read -r src; do
+        [ -n "$src" ] || continue
+        case "$cwd/" in
+            "${src%/}"/*) return 0 ;;
+        esac
+    done <<EOF
+$mounts
+EOF
+
+    top="${cwd#/}"
+    top="/${top%%/*}"
+    echo "Error: podman machine does not share $cwd with its VM" >&2
+    echo "Shared prefixes: $(printf '%s\n' "$mounts" | tr '\n' ' ')" >&2
+    echo "Run from a directory under a shared prefix (e.g. \$HOME), or share this one:" >&2
+    echo "  podman machine stop && podman machine set --volume $top:$top && podman machine start" >&2
+    exit 1
+}
+check_podman_machine_shares_cwd
+
 # Auto-detect SELinux volume flag
 VOLUME_FLAG=""
 if [ -f /etc/selinux/config ] && grep -q 'SELINUX=enforcing' /etc/selinux/config 2>/dev/null; then

@@ -547,6 +547,118 @@ test_rodin_headless_fast_fails_without_gui_session() {
             "$ROOT_DIR/rodin-headless.sh" model.zip
 }
 
+test_rodin_podman_mac_requires_shared_cwd() {
+    local tmpbin models_dir args_file args output status
+    tmpbin="$(new_tmpdir)"
+    models_dir="$(new_tmpdir)"
+    args_file="$tmpbin/podman.args"
+
+    make_uname_stub "$tmpbin" Darwin arm64
+
+    # machine inspect reports $RODIN_TEST_MOUNTS as the shared sources
+    # via the podman 4.x .Mounts template, or — when that is unset, like
+    # podman 5.x — points the config-file fallback at
+    # $RODIN_TEST_MACHINE_CONFIG; image inspect pretends an amd64 image
+    # exists; everything else records its args like the docker stubs.
+    cat > "$tmpbin/podman" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+case "$1 ${2:-}" in
+    "machine inspect")
+        case "${4:-}" in
+            *.Mounts*)
+                [ -n "${RODIN_TEST_MOUNTS:-}" ] || exit 125
+                printf '%s\n' "$RODIN_TEST_MOUNTS"
+                ;;
+            *ConfigDir*)
+                printf '%s\n' "${RODIN_TEST_MACHINE_CONFIG:-}"
+                ;;
+        esac
+        exit 0
+        ;;
+    "image inspect")
+        if [ "${3:-}" = "--format" ]; then
+            printf '%s\n' amd64
+        fi
+        exit 0
+        ;;
+esac
+
+printf '<%s>\n' "$@" > "$RODIN_TEST_ARGS"
+EOF
+    chmod +x "$tmpbin/podman"
+
+    # cwd outside every shared prefix: an actionable error, no run
+    set +e
+    output="$(
+        cd "$models_dir" \
+            && RODIN_TEST_MOUNTS='/nonexistent-prefix' RODIN_TEST_ARGS="$args_file" \
+                RODIN_RUNTIME=podman RODIN_DIR="" \
+                PATH="$tmpbin:$PATH" "$ROOT_DIR/rodin" build model.zip 2>&1
+    )"
+    status=$?
+    set -e
+    if [ "$status" -eq 0 ]; then
+        fail "podman on macOS should refuse a cwd the VM does not share"
+    fi
+    assert_contains "$output" "does not share" \
+        "the unshared-cwd error should explain the problem"
+    assert_contains "$output" "podman machine set --volume" \
+        "the unshared-cwd error should show the sharing command"
+    if [ -e "$args_file" ]; then
+        fail "an unshared cwd should fail before any podman build/run"
+    fi
+
+    # podman 5.x: no .Mounts in machine inspect; the machine config
+    # file carries the shared sources instead. Real configs are
+    # single-line JSON, so several mounts share one line.
+    printf '{"Mounts":[{"Source":"/nonexistent-prefix","Target":"/nonexistent-prefix","Type":"virtiofs"},{"Source":"/other-prefix","Target":"/other-prefix","Type":"virtiofs"}]}\n' \
+        > "$tmpbin/machine-config.json"
+    set +e
+    output="$(
+        cd "$models_dir" \
+            && RODIN_TEST_MACHINE_CONFIG="$tmpbin/machine-config.json" \
+                RODIN_TEST_ARGS="$args_file" \
+                RODIN_RUNTIME=podman RODIN_DIR="" \
+                PATH="$tmpbin:$PATH" "$ROOT_DIR/rodin" build model.zip 2>&1
+    )"
+    status=$?
+    set -e
+    if [ "$status" -eq 0 ]; then
+        fail "the config-file mount fallback should also refuse an unshared cwd"
+    fi
+    assert_contains "$output" "does not share" \
+        "the config-file mount fallback should produce the same error"
+
+    # The shared mount sits first on the single line: extraction must
+    # see every Source, not just the line's last one
+    printf '{"Mounts":[{"Source":"%s","Target":"%s","Type":"virtiofs"},{"Source":"/other-prefix","Target":"/other-prefix","Type":"virtiofs"}]}\n' \
+        "$models_dir" "$models_dir" > "$tmpbin/machine-config.json"
+    (
+        cd "$models_dir" \
+            && RODIN_TEST_MACHINE_CONFIG="$tmpbin/machine-config.json" \
+                RODIN_TEST_ARGS="$args_file" \
+                RODIN_RUNTIME=podman RODIN_DIR="" \
+                PATH="$tmpbin:$PATH" "$ROOT_DIR/rodin" build model.zip
+    )
+    args="$(cat "$args_file")"
+    assert_contains "$args" "<run>" \
+        "a shared cwd from the config-file fallback should proceed to the run"
+    rm -f "$args_file"
+
+    # cwd under a shared prefix: dispatches to podman run as usual
+    (
+        cd "$models_dir" \
+            && RODIN_TEST_MOUNTS="$models_dir" RODIN_TEST_ARGS="$args_file" \
+                RODIN_RUNTIME=podman RODIN_DIR="" \
+                PATH="$tmpbin:$PATH" "$ROOT_DIR/rodin" build model.zip
+    )
+    args="$(cat "$args_file")"
+    assert_contains "$args" "<run>" \
+        "a shared cwd should proceed to the container run"
+}
+
 test_default_rodin_prefix_requires_home_or_rodin_prefix() {
     assert_fails_with "set RODIN_PREFIX or HOME" \
         env RODIN_PREFIX= HOME= \
@@ -1572,6 +1684,7 @@ main() {
     test_darwin_gui_session_probe
     test_rodin_wrapper_falls_back_without_gui_session
     test_rodin_headless_fast_fails_without_gui_session
+    test_rodin_podman_mac_requires_shared_cwd
     test_default_rodin_prefix_requires_home_or_rodin_prefix
     test_rodin_wrapper_survives_underivable_prefix
     test_rodin_headless_rejects_missing_archives

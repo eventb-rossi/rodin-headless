@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Thin wrapper around the rodin-headless toolchain.
 # Runs against a native Rodin install when one is available, otherwise
-# falls back to the rodin-headless Docker image (auto-built on first run).
+# falls back to the Docker image: pulls the prebuilt image published to GHCR
+# (RODIN_IMAGE, default ghcr.io/eventb-rossi/rodin-headless:latest), building
+# locally only when the pull fails or RODIN_BUILD_LOCAL=1 is set.
 #
 # Usage: ./rodin <command> [args...]
 #   Commands are the same in both modes (build, check, prove, validate,
@@ -15,7 +17,11 @@
 
 set -euo pipefail
 
-IMAGE="rodin-headless"
+# Prefer the prebuilt image published by CI; fall back to a local build when
+# it cannot be pulled (offline, or a custom RODIN_IMAGE that does not exist
+# upstream). Set RODIN_IMAGE to override the ref, or RODIN_BUILD_LOCAL=1 to
+# always build from the local Dockerfile (e.g. when iterating on it).
+IMAGE="${RODIN_IMAGE:-ghcr.io/eventb-rossi/rodin-headless:latest}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=rodin-headless-lib.sh
 . "$SCRIPT_DIR/rodin-headless-lib.sh"
@@ -215,13 +221,20 @@ if [ -f /etc/selinux/config ] && grep -q 'SELINUX=enforcing' /etc/selinux/config
     VOLUME_FLAG=":Z"
 fi
 
-# Build image if not present, or if an existing Apple Silicon image has the
-# wrong architecture for Rodin/ProB's Linux x86_64 binaries.
+# Obtain the image if not present, or if an existing Apple Silicon image has
+# the wrong architecture for Rodin/ProB's Linux x86_64 binaries. Prefer the
+# prebuilt image (a quick pull beats the ~1.3 GB local build); fall back to
+# building from the local Dockerfile when the pull fails or is opted out.
+# ${arr[@]+...} keeps the empty-array expansion alive under bash 3.2's set -u
+# (stock macOS), where a bare "${arr[@]}" is fatal.
 if image_needs_build; then
-    echo "Building $IMAGE image..."
-    # ${arr[@]+...} keeps the empty-array expansion alive under bash
-    # 3.2's set -u (stock macOS), where a bare "${arr[@]}" is fatal.
-    "$RUNTIME" build ${PLATFORM_ARGS[@]+"${PLATFORM_ARGS[@]}"} -t "$IMAGE" "$SCRIPT_DIR"
+    if [ -z "${RODIN_BUILD_LOCAL:-}" ] \
+        && "$RUNTIME" pull ${PLATFORM_ARGS[@]+"${PLATFORM_ARGS[@]}"} "$IMAGE"; then
+        echo "Pulled prebuilt $IMAGE" >&2
+    else
+        echo "Building $IMAGE image..." >&2
+        "$RUNTIME" build ${PLATFORM_ARGS[@]+"${PLATFORM_ARGS[@]}"} -t "$IMAGE" "$SCRIPT_DIR"
+    fi
 fi
 
 # Rootless engines map container root to the invoking host user, so

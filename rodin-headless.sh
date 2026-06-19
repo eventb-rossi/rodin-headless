@@ -24,7 +24,7 @@
 # Examples:
 #   ./rodin-headless.sh /home/work/bin/rodin . evbt_bridge.zip evbt_elevator.zip
 #   RODIN_DIR=/opt/rodin MODELS_DIR=/models ./rodin-headless.sh model.zip
-#   docker run --rm -v "$(pwd):/models" rodin-headless model.zip
+#   docker run --rm -v "$(pwd):/models" ghcr.io/eventb-rossi/rodin-headless model.zip
 
 set -euo pipefail
 

@@ -13,7 +13,7 @@ cd rodin-headless
 ./rodin my-model.zip
 ```
 
-The `rodin` wrapper picks a runtime automatically: a native Rodin install if one is present, otherwise the Docker image (auto-built on first run, current directory mounted). Built artifacts are written back into the zip in-place.
+The `rodin` wrapper picks a runtime automatically: a native Rodin install if one is present, otherwise the Docker image. In container mode it pulls the prebuilt image published to GHCR (`ghcr.io/eventb-rossi/rodin-headless:latest`) on first run, falling back to a local `docker build` when the pull is unavailable (offline). The current directory is mounted and built artifacts are written back into the zip in-place.
 
 ### Native install (Linux x86_64, macOS)
 
@@ -164,6 +164,24 @@ The Rodin install must have the ProB plugin (`de.prob.core`) — a stock Rodin d
 
 ## Docker Image Details
 
+### Prebuilt image
+
+CI publishes the image to the GitHub Container Registry on every push to `main`, on the weekly canary build, and on releases. It is **linux/amd64-only** (Rodin and ProB only ship x86_64 Linux binaries; on arm64 hosts it runs under emulation). Pull and run it directly:
+
+```bash
+docker pull ghcr.io/eventb-rossi/rodin-headless:latest
+docker run --rm -v "$PWD:/models" ghcr.io/eventb-rossi/rodin-headless build model.zip
+```
+
+The `rodin` wrapper uses this image by default in container mode. Two environment variables tune that behavior:
+
+- `RODIN_IMAGE` — override the image ref (default `ghcr.io/eventb-rossi/rodin-headless:latest`), e.g. to pin a datestamped tag or point at a fork.
+- `RODIN_BUILD_LOCAL=1` — skip the pull and always build from the local Dockerfile (useful when iterating on it).
+
+Tags: `latest` (rolling — moved by pushes to `main` and the weekly canary), `YYYYMMDD` (weekly canary), and the release version on tagged releases. Releases do **not** move `latest`.
+
+### Building locally
+
 The Dockerfile is a thin layer: it installs the system packages (GTK3/X11, Xvfb, JDK, zip, SMT solvers) and runs the same `rodin-install.sh` with `--prefix /opt`.
 
 | Component | Version |
@@ -179,8 +197,8 @@ The Dockerfile is a thin layer: it installs the system packages (GTK3/X11, Xvfb,
 Images built from `latest` stay auditable after the fact: the requested versions (and any pinned tarball) are recorded as image labels, and the installer writes the **resolved** versions (including the exact Rodin tarball) into a manifest inside the image — labels are advisory, the manifest is canonical. A native install gets the same manifest under its prefix:
 
 ```bash
-docker image inspect --format '{{json .Config.Labels}}' rodin-headless
-docker run --rm --entrypoint cat rodin-headless /opt/.rodin-headless-versions
+docker image inspect --format '{{json .Config.Labels}}' ghcr.io/eventb-rossi/rodin-headless
+docker run --rm --entrypoint cat ghcr.io/eventb-rossi/rodin-headless /opt/.rodin-headless-versions
 cat ~/.local/share/rodin-headless/.rodin-headless-versions   # native install
 ```
 

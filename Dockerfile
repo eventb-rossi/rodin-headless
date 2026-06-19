@@ -77,6 +77,14 @@ ENV MODELS_DIR=/models
 WORKDIR /models
 ENTRYPOINT ["entrypoint.sh"]
 
+# OCI metadata. image.source links the published GHCR package back to the
+# repository (so it shows up on the package page); the others document the
+# image. metadata-action also injects these at push time — this is the
+# durable copy that also tags locally built images.
+LABEL org.opencontainers.image.source="https://github.com/eventb-rossi/rodin-headless" \
+      org.opencontainers.image.description="Rodin Event-B IDE headless builder" \
+      org.opencontainers.image.licenses="MIT"
+
 # Requested versions, knowable at build time; the installer records the
 # resolved ones in /opt/.rodin-headless-versions inside the image.
 # Last on purpose: a LABEL consuming these ARGs any earlier would

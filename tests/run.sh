@@ -162,8 +162,10 @@ make_docker_args_stub() {
     make_engine_args_stub "$1" docker
 }
 
-# Stub docker so `image inspect` reports no image and build/run record
-# their args to $RODIN_TEST_BUILD_ARGS / $RODIN_TEST_RUN_ARGS.
+# Stub docker so `image inspect` reports no image and pull/build/run record
+# their args to $RODIN_TEST_PULL_ARGS / $RODIN_TEST_BUILD_ARGS /
+# $RODIN_TEST_RUN_ARGS (each optional). `pull` fails when RODIN_TEST_PULL_FAILS
+# is set, so one stub drives both the prebuilt-pull and build-fallback paths.
 make_docker_buildrun_stub() {
     local tmpbin="$1"
 
@@ -183,6 +185,11 @@ case "$1" in
         printf '[name=seccomp,profile=builtin name=cgroupns]\n'
         exit 0
         ;;
+    pull)
+        [ -z "${RODIN_TEST_PULL_ARGS:-}" ] || printf '<%s>\n' "$@" > "$RODIN_TEST_PULL_ARGS"
+        [ -z "${RODIN_TEST_PULL_FAILS:-}" ] || exit 1
+        exit 0
+        ;;
     build)
         printf '<%s>\n' "$@" > "$RODIN_TEST_BUILD_ARGS"
         exit 0
@@ -198,6 +205,15 @@ case "$1" in
 esac
 EOF
     chmod +x "$tmpbin/docker"
+}
+
+# Invoke the wrapper in docker container mode against the $tmpbin stubs, with
+# extra NAME=value pairs in the environment. RODIN_DIR="" / RODIN_PREFIX both
+# prevent any native install from being detected. Bash's dynamic scoping
+# exposes the calling test's $tmpbin (cf. run_podman_wrapper).
+run_docker_wrapper() {
+    env "$@" RODIN_DIR="" RODIN_PREFIX="$tmpbin" \
+        PATH="$tmpbin:$PATH" "$ROOT_DIR/rodin" build model.zip
 }
 
 # Stub uname so platform detection sees the given OS and architecture;
@@ -429,12 +445,12 @@ test_rodin_build_forces_amd64_on_apple_silicon() {
     make_docker_buildrun_stub "$tmpbin"
     make_uname_stub "$tmpbin" Darwin arm64
 
-    RODIN_TEST_BUILD_ARGS="$build_args_file" \
-    RODIN_TEST_RUN_ARGS="$run_args_file" \
-    RODIN_DIR="" \
-    RODIN_PREFIX="$tmpbin" \
-    PATH="$tmpbin:$PATH" \
-        "$ROOT_DIR/rodin" build model.zip
+    # RODIN_BUILD_LOCAL skips the prebuilt-image pull so this exercises the
+    # local build path deterministically (the pull path has its own tests).
+    run_docker_wrapper \
+        RODIN_TEST_BUILD_ARGS="$build_args_file" \
+        RODIN_TEST_RUN_ARGS="$run_args_file" \
+        RODIN_BUILD_LOCAL=1
 
     build_args="$(cat "$build_args_file")"
     run_args="$(cat "$run_args_file")"
@@ -457,12 +473,11 @@ test_rodin_build_omits_platform_on_x86_64() {
 
     # Regression test: with no platform override the wrapper must expand
     # an empty array, which is fatal on bash 3.2 with set -u when unguarded.
-    RODIN_TEST_BUILD_ARGS="$build_args_file" \
-    RODIN_TEST_RUN_ARGS="$run_args_file" \
-    RODIN_DIR="" \
-    RODIN_PREFIX="$tmpbin" \
-    PATH="$tmpbin:$PATH" \
-        "$ROOT_DIR/rodin" build model.zip
+    # RODIN_BUILD_LOCAL pins this to the local build path.
+    run_docker_wrapper \
+        RODIN_TEST_BUILD_ARGS="$build_args_file" \
+        RODIN_TEST_RUN_ARGS="$run_args_file" \
+        RODIN_BUILD_LOCAL=1
 
     build_args="$(cat "$build_args_file")"
     run_args="$(cat "$run_args_file")"
@@ -470,6 +485,64 @@ test_rodin_build_omits_platform_on_x86_64() {
         "rodin wrapper should not force a platform on x86_64 hosts"
     assert_not_contains "$run_args" "<--platform>" \
         "rodin wrapper should not force a platform on x86_64 hosts"
+}
+
+test_rodin_pulls_prebuilt_image() {
+    local tmpbin pull_args_file build_args_file run_args_file pull_args run_args
+    tmpbin="$(new_tmpdir)"
+    pull_args_file="$tmpbin/docker.pull.args"
+    build_args_file="$tmpbin/docker.build.args"
+    run_args_file="$tmpbin/docker.run.args"
+
+    make_docker_buildrun_stub "$tmpbin"
+    # arm64 host so the pull is also checked to carry the amd64 platform flag.
+    make_uname_stub "$tmpbin" Darwin arm64
+
+    run_docker_wrapper \
+        RODIN_TEST_PULL_ARGS="$pull_args_file" \
+        RODIN_TEST_BUILD_ARGS="$build_args_file" \
+        RODIN_TEST_RUN_ARGS="$run_args_file"
+
+    if [ -e "$build_args_file" ]; then
+        fail "rodin wrapper should not build locally when the prebuilt image pulls"
+    fi
+    pull_args="$(cat "$pull_args_file")"
+    run_args="$(cat "$run_args_file")"
+    assert_contains "$pull_args" "<ghcr.io/eventb-rossi/rodin-headless:latest>" \
+        "rodin wrapper should pull the published GHCR image"
+    assert_contains "$pull_args" "<--platform>
+<linux/amd64>" \
+        "rodin wrapper should pull the amd64 image on Apple Silicon"
+    assert_contains "$run_args" "<ghcr.io/eventb-rossi/rodin-headless:latest>" \
+        "rodin wrapper should run the pulled image"
+}
+
+test_rodin_builds_when_pull_fails() {
+    local tmpbin pull_args_file build_args_file run_args_file build_args
+    tmpbin="$(new_tmpdir)"
+    pull_args_file="$tmpbin/docker.pull.args"
+    build_args_file="$tmpbin/docker.build.args"
+    run_args_file="$tmpbin/docker.run.args"
+
+    make_docker_buildrun_stub "$tmpbin"
+    make_uname_stub "$tmpbin" Linux x86_64
+
+    # Pull fails (offline / unpublished ref) -> fall back to a local build.
+    run_docker_wrapper \
+        RODIN_TEST_PULL_FAILS=1 \
+        RODIN_TEST_PULL_ARGS="$pull_args_file" \
+        RODIN_TEST_BUILD_ARGS="$build_args_file" \
+        RODIN_TEST_RUN_ARGS="$run_args_file"
+
+    if [ ! -e "$build_args_file" ]; then
+        fail "rodin wrapper should build locally when the prebuilt image pull fails"
+    fi
+    # The pull must have been attempted (with the right ref) before falling back.
+    assert_contains "$(cat "$pull_args_file")" "<ghcr.io/eventb-rossi/rodin-headless:latest>" \
+        "rodin wrapper should attempt to pull the published image before building"
+    build_args="$(cat "$build_args_file")"
+    assert_contains "$build_args" "<ghcr.io/eventb-rossi/rodin-headless:latest>" \
+        "the local build fallback should tag the configured image ref"
 }
 
 test_rodin_forwards_timeout_environment() {
@@ -550,8 +623,8 @@ test_rodin_runtime_docker_overrides_native() {
     args="$(cat "$args_file")"
     assert_contains "$args" "<run>" \
         "RODIN_RUNTIME=docker should dispatch to the container runtime"
-    assert_contains "$args" "<rodin-headless>" \
-        "container dispatch should use the rodin-headless image"
+    assert_contains "$args" "<ghcr.io/eventb-rossi/rodin-headless:latest>" \
+        "container dispatch should use the published rodin-headless image"
 }
 
 test_darwin_gui_session_probe() {
@@ -1819,6 +1892,8 @@ main() {
     test_prob_version_uses_highest_release
     test_rodin_build_forces_amd64_on_apple_silicon
     test_rodin_build_omits_platform_on_x86_64
+    test_rodin_pulls_prebuilt_image
+    test_rodin_builds_when_pull_fails
     test_rodin_forwards_timeout_environment
     test_rodin_wrapper_prefers_native_install
     test_rodin_wrapper_detects_mac_app_bundle_install

@@ -1,0 +1,5 @@
+# hadolint configuration — see .github/workflows/ci.yml
+ignored:
+  # apt packages are intentionally unpinned: the image floats and is rebuilt
+  # periodically (the weekly Docker workflow is the canary for upstream drift).
+  - DL3008

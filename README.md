@@ -1,5 +1,7 @@
 # rodin-headless
 
+[![CI](https://github.com/eventb-rossi/rodin-headless/actions/workflows/ci.yml/badge.svg)](https://github.com/eventb-rossi/rodin-headless/actions/workflows/ci.yml)
+
 Headless toolchain for building, model-checking, and proving [Rodin](https://wiki.event-b.org/index.php/Main_Page) Event-B models — natively on Linux or macOS, or via Docker. Feed it `.zip` archives containing Event-B models and get back static-checked artifacts (`.bcm`/`.bcc`), model checking results, and proof obligation discharge reports.
 
 ## Quick Start

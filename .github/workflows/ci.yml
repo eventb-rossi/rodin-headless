@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ludeeus/action-shellcheck@2.0.0
+        env:
+          # Follow `# shellcheck source=` directives into rodin-headless-lib.sh.
+          SHELLCHECK_OPTS: --external-sources
+
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # tests/run.sh stubs curl/docker/java/uname via PATH; only zip/unzip are
+      # real (unzip is preinstalled on the runner, zip is not).
+      - run: sudo apt-get update && sudo apt-get install -y zip unzip
+      - run: bash tests/run.sh
+
+  hadolint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: hadolint/hadolint-action@v3.3.0
+        with:
+          dockerfile: Dockerfile
+          config: .hadolint.yaml   # explicit: auto-detection is unreliable in the action container

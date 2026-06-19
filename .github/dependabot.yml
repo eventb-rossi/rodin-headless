@@ -1,0 +1,21 @@
+version: 2
+updates:
+  # Keep the actions used by the workflows below current.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]        # one grouped PR instead of one-per-action
+
+  # Track the Dockerfile base image (eclipse-temurin).
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      # Stay on JDK 21 (rodin-install.sh requires 17+, the image targets 21):
+      # allow patch/minor/base-image refreshes but not 21 -> 22.
+      - dependency-name: "*eclipse-temurin"
+        update-types: ["version-update:semver-major"]

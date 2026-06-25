@@ -53,6 +53,15 @@ case "${1:-}" in
     validate)  shift; exec "$SCRIPT_DIR/rodin-headless.sh" --mode validate "$@" ;;
     autoprove) shift; exec "$SCRIPT_DIR/rodin-headless.sh" --mode autoprove "$@" ;;
     probcli)   shift; run_probcli "$@" ;;
+    --version|-V)
+        # Sourced only here so the published image answers `--version`
+        # directly; the engine would reject it as an unknown option.
+        export RODIN_HEADLESS_LIBEXEC="$SCRIPT_DIR"
+        # shellcheck source=rodin-headless-lib.sh
+        . "$SCRIPT_DIR/rodin-headless-lib.sh"
+        printf 'rodin-headless %s\n' "$(rodin_headless_version)"
+        exit 0
+        ;;
     help|--help|-h) usage; exit 0 ;;
     *)        exec "$SCRIPT_DIR/rodin-headless.sh" "$@" ;;
 esac

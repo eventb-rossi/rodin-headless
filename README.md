@@ -37,6 +37,47 @@ Native macOS additionally requires a logged-in graphical (Aqua) session — SWT'
 
 Re-running is safe: completed phases are skipped unless `--force` is given.
 
+### Windows
+
+The `rodin-headless` engine is a Unix shell toolchain, so on Windows it runs through
+the Docker image rather than natively. A PowerShell wrapper, `rodin-headless.ps1`,
+runs it: it mounts the current directory at `/models` and forwards the command to the
+prebuilt image, mirroring the container path of the bash wrapper. (Rodin and ProB do
+ship native Windows x86_64 builds — packaged as `rodin` and `prob` in the eventb-rossi
+Scoop bucket — but this headless toolchain is not yet wired up to drive them natively
+on Windows.)
+
+```powershell
+rodin-headless build model.zip   # runs ghcr.io/eventb-rossi/rodin-headless via Docker Desktop
+rodin-headless --version
+rodin-headless help
+```
+
+It needs Docker Desktop (or Podman Desktop via `RODIN_RUNTIME=podman`). On the
+WSL2 backend the current drive is shared automatically; on the legacy Hyper-V
+backend, enable file sharing for the drive in Docker Desktop settings. The same
+`RODIN_IMAGE` and `RODIN_BUILD_TIMEOUT` variables apply. The Scoop manifest is
+maintained in a separate bucket and fetches this `rodin-headless.ps1`.
+
+### Installing from source (packagers)
+
+For a system-wide install — and as the entry point downstream packaging
+recipes (Debian, Fedora/COPR, Gentoo, Homebrew) build on — use the Makefile:
+
+```bash
+make install prefix=/usr DESTDIR="$pkgdir"   # stage into a package root
+make install prefix=/usr/local               # install directly
+make uninstall prefix=/usr/local
+```
+
+It follows the GNU directory variables (`prefix`, `bindir`, `libexecdir`,
+`datadir`, `mandir`): the `rodin-headless` and `rodin-headless-install`
+commands go in `$bindir`, the engine/library/helpers in
+`$libexecdir/rodin-headless`, the local-build Docker context in
+`$datadir/rodin-headless`, and the man pages in `$mandir/man1`. The bash
+scripts have no build step; this only copies files and rewrites the
+library-location markers to the install paths.
+
 ## Commands
 
 ```bash

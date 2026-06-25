@@ -1,0 +1,131 @@
+.TH RODIN\-HEADLESS 1 "2026-06-24" "rodin-headless @VERSION@" "User Commands"
+.SH NAME
+rodin\-headless \- headless Event\-B build, model\-check, and proof runner
+.SH SYNOPSIS
+.B rodin\-headless
+.RI [ command ]
+.RI [ \-\-strict ]
+.RI [ model.zip ...]
+.br
+.B rodin\-headless
+.RB [ \-\-version | \-V ]
+.br
+.B rodin\-headless
+.B help
+.SH DESCRIPTION
+.B rodin\-headless
+feeds
+.I .zip
+archives containing Event\-B models through Rodin's headless static checker
+and, optionally, ProB validation or the SMT/Atelier\ B auto\-provers, writing
+the generated artifacts
+.RB ( .bcm ", " .bcc ", " .bpo ", " .bps ", " .bpr )
+back into each archive in place.
+.PP
+It picks a runtime automatically: a native Rodin install when one is present
+(see
+.BR rodin\-headless\-install (1)),
+otherwise the prebuilt Docker image
+.RB ( docker " or " podman ).
+The selection is controlled by
+.BR RODIN_RUNTIME .
+.PP
+If no command is given,
+.B build
+is assumed. If no archives are listed, every
+.I .zip
+in the current directory is processed.
+.SH COMMANDS
+.TP
+.B build " [zips...]"
+Build the models with Rodin (the default).
+.TP
+.B check " [zips...]"
+Build, then model\-check with ProB (bounded, 1000 states).
+.TP
+.B prove " [zips...]"
+Build, then run ProB constraint\-based invariant checking.
+.TP
+.B validate " [zips...]"
+Build, then full ProB validation (invariants, deadlock, assertions).
+.TP
+.B autoprove " [zips...]"
+Build, then discharge proof obligations with SMT and Atelier\ B tactics.
+.TP
+.B probcli " [args...]"
+Run
+.B probcli
+directly with arbitrary arguments.
+.TP
+.B help
+Print usage and exit. Requires no runtime, install, or image.
+.SH OPTIONS
+.TP
+.B \-\-strict
+Exit non\-zero when any component fails Rodin's static check or was never
+checked (including multi\-project archives). May appear anywhere after the
+command word.
+.TP
+.BR \-\-version ", " \-V
+Print the program version and exit.
+.SH ENVIRONMENT
+.TP
+.B RODIN_RUNTIME
+Runtime selection:
+.BR auto " (default), " native ", " docker ", or " podman .
+.TP
+.B RODIN_DIR
+Path to a Rodin install to use directly (must contain
+.IR rodin.ini ).
+.TP
+.B RODIN_PREFIX
+Native install prefix searched in auto mode
+.RI ( default " ~/.local/share/rodin-headless" ).
+.TP
+.B RODIN_IMAGE
+Container image reference
+.RI ( default " ghcr.io/eventb-rossi/rodin-headless:latest" ).
+.TP
+.B RODIN_BUILD_LOCAL
+When set, build the image from the local Dockerfile instead of pulling.
+.TP
+.B RODIN_BUILD_TIMEOUT
+Build timeout
+.RI ( default " 60m" ;
+.B off
+disables it);
+.B RODIN_BUILD_TIMEOUT_KILL_AFTER
+sets the grace period after the timeout
+.RI ( default " 30s" ).
+.TP
+.B RODIN_PLATFORM
+Override platform detection
+.RB ( linux\-x86_64 ", " macos\-x86_64 ", " macos\-aarch64 ).
+.TP
+.B RODIN_HEADLESS_LIBEXEC
+Directory holding the engine library and helper scripts. Set by the
+installed wrapper; override only for unusual layouts.
+.TP
+.B RODIN_HEADLESS_DATADIR
+Directory holding the Docker build context used for a local image build.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+A runtime or usage error, or (with
+.BR \-\-strict )
+a component that failed or was not statically checked.
+.TP
+.B 124
+The build timed out.
+.SH FILES
+.TP
+.I <prefix>/.rodin-headless-versions
+Manifest of the resolved Rodin and ProB versions for a native install.
+.SH SEE ALSO
+.BR rodin\-headless\-install (1),
+.BR probcli (1)
+.SH AUTHOR
+Denis Efremov.

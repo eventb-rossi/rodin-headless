@@ -71,6 +71,10 @@ RUN install -d -m 1777 /tmp/.X11-unix
 COPY --chmod=755 rodin-headless.sh rodin-headless-lib.sh entrypoint.sh \
     /usr/local/bin/
 
+# VERSION so `rodin-headless --version` (via the entrypoint) reports the
+# project version from inside the image instead of "unknown".
+COPY --chmod=644 VERSION /usr/local/bin/
+
 ENV RODIN_DIR=/opt/rodin
 ENV MODELS_DIR=/models
 

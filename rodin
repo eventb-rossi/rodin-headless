@@ -54,6 +54,10 @@ fi
 PLATFORM_ARGS=()
 
 case "${1:-}" in
+    --version|-V)
+        printf 'rodin-headless %s\n' "$(rodin_headless_version)"
+        exit 0
+        ;;
     help|--help|-h)
         exec bash "$SCRIPT_DIR/entrypoint.sh" help
         ;;

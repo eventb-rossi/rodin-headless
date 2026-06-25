@@ -72,6 +72,7 @@ while [ $# -gt 0 ]; do
         --rodin-tarball) RODIN_TARBALL_ARG="$2"; shift 2 ;;
         --prob-version)  PROB_VERSION_ARG="$2"; shift 2 ;;
         --check-deps)    CHECK_DEPS=1; shift ;;
+        --version|-V)    printf 'rodin-headless-install %s\n' "$(rodin_headless_version)"; exit 0 ;;
         -h|--help)       usage; exit 0 ;;
         *)
             echo "ERROR: Unknown option: $1" >&2

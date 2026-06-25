@@ -13,6 +13,28 @@ default_rodin_prefix() {
     printf '%s\n' "${RODIN_PREFIX:-$HOME/.local/share/rodin-headless}"
 }
 
+# Project version for --version output. The VERSION file is shipped beside
+# the library (libexec) and in the data dir; in the flat checkout both
+# resolve to the repo root. Prints "unknown" when it cannot be located.
+rodin_headless_version() {
+    local dir version
+    for dir in \
+        "${RODIN_HEADLESS_LIBEXEC:-}" \
+        "${RODIN_HEADLESS_DATADIR:-}" \
+        "$(dirname "$0")"; do
+        if [ -n "$dir" ] && [ -f "$dir/VERSION" ]; then
+            version="$(head -1 "$dir/VERSION")"
+            # An empty or whitespace-only VERSION is treated as missing, so
+            # the loop keeps looking and otherwise falls through to
+            # "unknown" instead of printing a bare "rodin-headless ".
+            case "$version" in
+                *[![:space:]]*) printf '%s\n' "$version"; return 0 ;;
+            esac
+        fi
+    done
+    printf 'unknown\n'
+}
+
 # JDK 23+ ships restrictive JAXP defaults that choke on the large
 # entities in Eclipse XML (update-site metadata, registries); 0 means
 # unlimited, and the properties are recognized since JDK 8. Spliced

@@ -1,0 +1,91 @@
+name: Release
+
+# Published releases ship a reproducible source tarball plus its SHA256SUMS as
+# release assets — the archive downstream packaging recipes (brew, apt, scoop,
+# gentoo, copr) consume — and then ping the eventb-rossi packaging repos so their
+# version-check workflows run immediately instead of waiting for their daily cron.
+#
+# The tarball is produced with `git archive` from the release tag, so its bytes
+# are a deterministic function of the tag — there is no build step, this is a
+# shell toolchain. workflow_dispatch is kept for rebuilding/re-uploading the
+# assets of an already-published release (e.g. the existing v4.0) without
+# re-notifying packagers: the notify job is gated to the `release` event below.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to (re)build assets for
+        required: true
+
+permissions:
+  contents: write           # upload assets to the release with GITHUB_TOKEN
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      # release event -> the published tag; manual run -> the dispatch input.
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+
+      # Strip a leading `v` so tag `v4.0` yields rodin-headless-4.0.tar.gz,
+      # matching the VERSION file. --prefix unpacks into a versioned directory,
+      # as downstream `tar xf` + `make install` recipes expect.
+      - name: Build source tarball
+        run: |
+          VERSION="${TAG#v}"
+          PKG="rodin-headless-$VERSION"
+          git archive --format=tar.gz --prefix="$PKG/" -o "$PKG.tar.gz" HEAD
+          echo "PKG=$PKG" >> "$GITHUB_ENV"
+
+      - name: Upload tarball to the release
+        run: gh release upload "$TAG" "$PKG.tar.gz" --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Hand the exact bytes to the checksums job so it hashes the published
+      # artifact rather than re-creating it.
+      - name: Hand tarball to checksums job
+        uses: actions/upload-artifact@v7
+        with:
+          name: tarball
+          path: ${{ env.PKG }}.tar.gz
+
+  checksums:
+    needs: [build]
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - name: Fetch the built tarball
+        uses: actions/download-artifact@v8
+        with:
+          name: tarball
+
+      - name: Generate SHA256SUMS
+        run: sha256sum rodin-headless-*.tar.gz > SHA256SUMS
+
+      - name: Upload SHA256SUMS to the release
+        run: gh release upload "$TAG" SHA256SUMS --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Tell the eventb-rossi packaging repos a new rodin-headless release exists, so
+  # their version-check workflows run immediately instead of waiting for the daily
+  # cron. Gated to real releases (not manual asset rebuilds) and run after the
+  # archive + SHA256SUMS are uploaded, so packagers see a complete release. See
+  # eventb-rossi/release-automation for the reusable workflow.
+  notify-downstream:
+    needs: [build, checksums]
+    if: github.event_name == 'release'
+    uses: eventb-rossi/release-automation/.github/workflows/notify-downstream.yml@main
+    with:
+      tool: rodin-headless
+      version: ${{ github.event.release.tag_name }}
+    secrets:
+      dispatch-token: ${{ secrets.VERSION_BUMP_TOKEN }}

@@ -15,6 +15,51 @@ cd rodin-headless
 
 The `rodin-headless` wrapper picks a runtime automatically: a native Rodin install if one is present, otherwise the Docker image. In container mode it pulls the prebuilt image published to GHCR (`ghcr.io/eventb-rossi/rodin-headless:latest`) on first run, falling back to a local `docker build` when the pull is unavailable (offline). The current directory is mounted and built artifacts are written back into the zip in-place.
 
+## Installation
+
+Prebuilt packages are published for the major package managers; each tracks the
+latest `rodin-headless` release.
+
+### Homebrew (macOS / Linux)
+
+```bash
+brew tap eventb-rossi/tap
+brew install rodin-headless
+```
+
+### APT (Ubuntu 26.04 "Resolute" or later)
+
+```bash
+curl -fsSL https://eventb-rossi.github.io/apt/KEY.gpg \
+  | sudo gpg --dearmor -o /etc/apt/keyrings/eventb.gpg
+echo "deb [signed-by=/etc/apt/keyrings/eventb.gpg] https://eventb-rossi.github.io/apt resolute main" \
+  | sudo tee /etc/apt/sources.list.d/eventb.list
+sudo apt update
+sudo apt install rodin-headless
+```
+
+### Scoop (Windows)
+
+```powershell
+scoop bucket add eventb https://github.com/eventb-rossi/scoop-eventb
+scoop install eventb/rodin-headless
+```
+
+### Gentoo
+
+```bash
+eselect repository eventb-rossi
+emaint sync -r eventb-rossi
+emerge -av rodin-headless
+```
+
+### Fedora (COPR)
+
+```bash
+sudo dnf copr enable @eventb-rossi/eventb-copr
+sudo dnf install rodin-headless
+```
+
 ### Native install (Linux x86_64, macOS)
 
 ```bash
@@ -77,6 +122,8 @@ commands go in `$bindir`, the engine/library/helpers in
 `$datadir/rodin-headless`, and the man pages in `$mandir/man1`. The bash
 scripts have no build step; this only copies files and rewrites the
 library-location markers to the install paths.
+
+
 
 ## Commands
 

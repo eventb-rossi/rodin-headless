@@ -16,9 +16,25 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Resolve the directory holding the shared library and helper scripts.
+# Order: a RODIN_HEADLESS_LIBEXEC override; the build-time sentinel that
+# `make install` rewrites to $libexecdir/rodin-headless; otherwise the
+# script's own directory — the flat checkout and the Docker image keep
+# every script beside the library. A sentinel left literal (source tree)
+# or pointing nowhere falls back to dirname "$0".
+: "${RODIN_HEADLESS_LIBEXEC:=__RODIN_HEADLESS_LIBEXEC__}"
+if [ ! -f "$RODIN_HEADLESS_LIBEXEC/rodin-headless-lib.sh" ]; then
+    RODIN_HEADLESS_LIBEXEC="$(cd "$(dirname "$0")" && pwd)"
+fi
+if [ ! -f "$RODIN_HEADLESS_LIBEXEC/rodin-headless-lib.sh" ]; then
+    echo "ERROR: cannot find rodin-headless-lib.sh in $RODIN_HEADLESS_LIBEXEC" >&2
+    echo "       Set RODIN_HEADLESS_LIBEXEC to the directory that holds it (the package's libexec/rodin-headless)." >&2
+    exit 1
+fi
+# Existing sibling lookups use $SCRIPT_DIR; keep it on the libexec dir.
+SCRIPT_DIR="$RODIN_HEADLESS_LIBEXEC"
 # shellcheck source=rodin-headless-lib.sh
-. "$SCRIPT_DIR/rodin-headless-lib.sh"
+. "$RODIN_HEADLESS_LIBEXEC/rodin-headless-lib.sh"
 
 PROB_BASE="https://stups.hhu-hosting.de/downloads/prob/tcltk/releases"
 SAFE_PATTERN='^[a-zA-Z0-9._-]+$'

@@ -28,9 +28,26 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Resolve the directory holding the shared library and helper scripts.
+# Order: a RODIN_HEADLESS_LIBEXEC override; the build-time sentinel that
+# `make install` rewrites to $libexecdir/rodin-headless; otherwise the
+# script's own directory — the flat checkout and the Docker image keep
+# every script beside the library. A sentinel left literal (source tree)
+# or pointing nowhere falls back to dirname "$0".
+: "${RODIN_HEADLESS_LIBEXEC:=__RODIN_HEADLESS_LIBEXEC__}"
+if [ ! -f "$RODIN_HEADLESS_LIBEXEC/rodin-headless-lib.sh" ]; then
+    RODIN_HEADLESS_LIBEXEC="$(cd "$(dirname "$0")" && pwd)"
+fi
+if [ ! -f "$RODIN_HEADLESS_LIBEXEC/rodin-headless-lib.sh" ]; then
+    echo "ERROR: cannot find rodin-headless-lib.sh in $RODIN_HEADLESS_LIBEXEC" >&2
+    echo "       Set RODIN_HEADLESS_LIBEXEC to the directory that holds it (the package's libexec/rodin-headless)." >&2
+    exit 1
+fi
+# Existing sibling lookups use $SCRIPT_DIR; keep it on the libexec dir.
+SCRIPT_DIR="$RODIN_HEADLESS_LIBEXEC"
 # Shared shell helpers used by the script and regression tests.
-. "$SCRIPT_DIR/rodin-headless-lib.sh"
+# shellcheck source=rodin-headless-lib.sh
+. "$RODIN_HEADLESS_LIBEXEC/rodin-headless-lib.sh"
 
 # Parse --mode/--strict flags; they may appear anywhere among the
 # positional arguments, and an unknown option fails fast instead of

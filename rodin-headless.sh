@@ -43,8 +43,6 @@ if [ ! -f "$RODIN_HEADLESS_LIBEXEC/rodin-headless-lib.sh" ]; then
     echo "       Set RODIN_HEADLESS_LIBEXEC to the directory that holds it (the package's libexec/rodin-headless)." >&2
     exit 1
 fi
-# Existing sibling lookups use $SCRIPT_DIR; keep it on the libexec dir.
-SCRIPT_DIR="$RODIN_HEADLESS_LIBEXEC"
 # Shared shell helpers used by the script and regression tests.
 # shellcheck source=rodin-headless-lib.sh
 . "$RODIN_HEADLESS_LIBEXEC/rodin-headless-lib.sh"

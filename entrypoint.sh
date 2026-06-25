@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 run_probcli() {
     if ! command -v probcli >/dev/null 2>&1; then
         echo "Error: probcli not found on PATH." >&2
-        echo "Run ./rodin-install.sh to install ProB, or add <prefix>/prob to PATH." >&2
+        echo "Run rodin-headless-install to install ProB, or add <prefix>/prob to PATH." >&2
         exit 1
     fi
     exec probcli "$@"
@@ -14,7 +14,7 @@ run_probcli() {
 
 usage() {
     cat <<'EOF'
-Usage: ./rodin <command> [args...]
+Usage: rodin-headless <command> [args...]
 
 Commands:
   build [zips...]                Build Event-B models with Rodin (default)
@@ -35,14 +35,14 @@ Environment:
   RODIN_BUILD_TIMEOUT_KILL_AFTER Grace period after timeout (default: 30s)
 
 Examples:
-  ./rodin model.zip
-  ./rodin build model.zip
-  ./rodin build --strict model.zip
-  ./rodin check model.zip
-  ./rodin prove model.zip
-  ./rodin validate model.zip
-  ./rodin autoprove model.zip
-  ./rodin probcli model.eventb -mc 500
+  rodin-headless model.zip
+  rodin-headless build model.zip
+  rodin-headless build --strict model.zip
+  rodin-headless check model.zip
+  rodin-headless prove model.zip
+  rodin-headless validate model.zip
+  rodin-headless autoprove model.zip
+  rodin-headless probcli model.eventb -mc 500
 EOF
 }
 

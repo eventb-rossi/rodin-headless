@@ -1878,6 +1878,25 @@ test_dockerfile_installs_headless_helper() {
         "Dockerfile should label the requested ProB version"
 }
 
+test_wrapper_reports_version() {
+    local expected output
+    expected="$(head -1 "$ROOT_DIR/VERSION")"
+    output="$("$ROOT_DIR/rodin-headless" --version)"
+    assert_eq "rodin-headless $expected" "$output" \
+        "rodin-headless --version should report the project version"
+    output="$("$ROOT_DIR/rodin-headless" -V)"
+    assert_eq "rodin-headless $expected" "$output" \
+        "rodin-headless -V should match --version"
+}
+
+test_installer_reports_version() {
+    local expected output
+    expected="$(head -1 "$ROOT_DIR/VERSION")"
+    output="$("$ROOT_DIR/rodin-headless-install" --version)"
+    assert_eq "rodin-headless-install $expected" "$output" \
+        "rodin-headless-install --version should report the project version"
+}
+
 main() {
     local tool
     for tool in zip unzip; do
@@ -1887,6 +1906,8 @@ main() {
     done
 
     test_rodin_help_skips_runtime
+    test_wrapper_reports_version
+    test_installer_reports_version
     test_rodin_version_uses_highest_release
     test_rodin_version_selects_platform_tarballs
     test_prob_version_uses_highest_release

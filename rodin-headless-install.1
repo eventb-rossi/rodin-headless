@@ -1,0 +1,92 @@
+.TH RODIN\-HEADLESS\-INSTALL 1 "2026-06-24" "rodin-headless @VERSION@" "User Commands"
+.SH NAME
+rodin\-headless\-install \- install Rodin and ProB for headless Event\-B builds
+.SH SYNOPSIS
+.B rodin\-headless\-install
+.RI [ options ]
+.SH DESCRIPTION
+.B rodin\-headless\-install
+downloads the Rodin IDE and the ProB CLI, points
+.I rodin.ini
+at the JVM on
+.BR PATH ,
+and installs the ProB/SMT/Atelier\ B Rodin plugins via the Eclipse p2
+director. The result is a self\-contained native install that
+.BR rodin\-headless (1)
+detects automatically.
+.PP
+It never uses
+.BR sudo :
+required system packages (a JDK\ 21+, GTK3, Xvfb, zip/unzip) are reported by
+.B \-\-check\-deps
+with per\-distribution install hints rather than installed. The same script
+is used inside the Docker image build, with
+.BR "\-\-prefix /opt" .
+.PP
+Supported natively on Linux x86_64 and macOS (Intel and Apple\ Silicon; the
+latter needs Rodin\ 3.10+). Re\-running is safe \(em completed phases are
+skipped unless
+.B \-\-force
+is given.
+.SH OPTIONS
+.TP
+.BI \-\-prefix " DIR"
+Install prefix
+.RI ( default " $RODIN_PREFIX" " or " ~/.local/share/rodin-headless ).
+The layout is
+.IR <prefix>/rodin " (the IDE) and " <prefix>/prob " (the ProB CLI)."
+.TP
+.BI \-\-only " rodin|prob"
+Run a single install phase.
+.TP
+.B \-\-force
+Reinstall even when a component is already present.
+.TP
+.BI \-\-rodin\-version " V"
+.BR latest " (default), " latest\-rc ", or a specific version such as " 3.9 .
+.TP
+.BI \-\-rodin\-tarball " F"
+Pin the exact tarball filename (skips detection; requires a specific
+.BR \-\-rodin\-version ).
+.TP
+.BI \-\-prob\-version " V"
+.BR latest " (default) or a specific version such as " 1.15.1 .
+.TP
+.B \-\-check\-deps
+Report the status of system dependencies and exit.
+.TP
+.BR \-\-version ", " \-V
+Print the program version and exit.
+.TP
+.BR \-h ", " \-\-help
+Print usage and exit.
+.SH ENVIRONMENT
+.TP
+.B RODIN_PREFIX
+Default install prefix when
+.B \-\-prefix
+is not given.
+.TP
+.B RODIN_PLATFORM
+Override platform detection
+.RB ( linux\-x86_64 ", " macos\-x86_64 ", " macos\-aarch64 ).
+.TP
+.B RODIN_HEADLESS_LIBEXEC
+Directory holding the shared library and version helper scripts.
+.SH EXIT STATUS
+.TP
+.B 0
+Success, or
+.B \-\-check\-deps
+found no missing required dependency.
+.TP
+.B 1
+An install error, a bad option, or a missing required dependency.
+.SH FILES
+.TP
+.I <prefix>/.rodin-headless-versions
+Manifest of the resolved Rodin and ProB versions.
+.SH SEE ALSO
+.BR rodin\-headless (1)
+.SH AUTHOR
+Denis Efremov.

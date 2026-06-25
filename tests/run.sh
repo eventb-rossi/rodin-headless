@@ -213,7 +213,7 @@ EOF
 # exposes the calling test's $tmpbin (cf. run_podman_wrapper).
 run_docker_wrapper() {
     env "$@" RODIN_DIR="" RODIN_PREFIX="$tmpbin" \
-        PATH="$tmpbin:$PATH" "$ROOT_DIR/rodin" build model.zip
+        PATH="$tmpbin:$PATH" "$ROOT_DIR/rodin-headless" build model.zip
 }
 
 # Stub uname so platform detection sees the given OS and architecture;
@@ -276,9 +276,9 @@ test_rodin_help_skips_runtime() {
 
     make_runtime_tripwire_stubs "$tmpbin" "$marker"
 
-    output="$(PATH="$tmpbin:$PATH" "$ROOT_DIR/rodin" help)"
+    output="$(PATH="$tmpbin:$PATH" "$ROOT_DIR/rodin-headless" help)"
 
-    assert_contains "$output" "Usage: ./rodin <command> [args...]" \
+    assert_contains "$output" "Usage: rodin-headless <command> [args...]" \
         "rodin help should print usage text"
     assert_contains "$output" "--strict" \
         "rodin help should document the strict flag"
@@ -558,7 +558,7 @@ test_rodin_forwards_timeout_environment() {
     RODIN_DIR="" \
     RODIN_PREFIX="$tmpbin" \
     PATH="$tmpbin:$PATH" \
-        "$ROOT_DIR/rodin" build model.zip
+        "$ROOT_DIR/rodin-headless" build model.zip
 
     args="$(cat "$args_file")"
     assert_contains "$args" "<-e>
@@ -587,7 +587,7 @@ test_rodin_wrapper_prefers_native_install() {
         cd "$models_dir" \
             && RODIN_DIR="$rodin_dir" DISPLAY=:0 RODIN_SKIP_GUI_CHECK=1 \
                 PATH="$tmpbin:$PATH" \
-                "$ROOT_DIR/rodin" build 2>&1
+                "$ROOT_DIR/rodin-headless" build 2>&1
     )"
     status=$?
     set -e
@@ -618,7 +618,7 @@ test_rodin_runtime_docker_overrides_native() {
     RODIN_RUNTIME=docker \
     RODIN_DIR="$rodin_dir" \
     PATH="$tmpbin:$PATH" \
-        "$ROOT_DIR/rodin" build model.zip
+        "$ROOT_DIR/rodin-headless" build model.zip
 
     args="$(cat "$args_file")"
     assert_contains "$args" "<run>" \
@@ -664,7 +664,7 @@ test_rodin_wrapper_falls_back_without_gui_session() {
         RODIN_TEST_ARGS="$args_file" \
         RODIN_DIR="$rodin_dir" \
         PATH="$tmpbin:$PATH" \
-            "$ROOT_DIR/rodin" build model.zip 2>&1
+            "$ROOT_DIR/rodin-headless" build model.zip 2>&1
     )"
 
     assert_contains "$output" "no graphical session" \
@@ -700,7 +700,7 @@ test_rodin_adds_user_mapping_for_rootful_docker() {
     RODIN_DIR="" \
     RODIN_PREFIX="$tmpbin" \
     PATH="$tmpbin:$PATH" \
-        "$ROOT_DIR/rodin" build model.zip
+        "$ROOT_DIR/rodin-headless" build model.zip
 
     args="$(cat "$args_file")"
     assert_contains "$args" "<--user>
@@ -726,7 +726,7 @@ test_rodin_omits_user_mapping_for_rootless_podman() {
     RODIN_RUNTIME=podman \
     RODIN_DIR="" \
     PATH="$tmpbin:$PATH" \
-        "$ROOT_DIR/rodin" build model.zip
+        "$ROOT_DIR/rodin-headless" build model.zip
 
     args="$(cat "$args_file")"
     assert_contains "$args" "<run>" \
@@ -744,7 +744,7 @@ run_podman_wrapper() {
         cd "$models_dir" \
             && env "$@" RODIN_TEST_ARGS="$args_file" \
                 RODIN_RUNTIME=podman RODIN_DIR="" \
-                PATH="$tmpbin:$PATH" "$ROOT_DIR/rodin" build model.zip 2>&1
+                PATH="$tmpbin:$PATH" "$ROOT_DIR/rodin-headless" build model.zip 2>&1
     )" || wrapper_status=$?
 }
 
@@ -835,7 +835,7 @@ test_rodin_wrapper_survives_underivable_prefix() {
         RODIN_TEST_ARGS="$args_file" \
         RODIN_DIR="" RODIN_PREFIX="" HOME="" \
         PATH="$tmpbin:$PATH" \
-            "$ROOT_DIR/rodin" build model.zip 2>&1
+            "$ROOT_DIR/rodin-headless" build model.zip 2>&1
     )"
 
     args="$(cat "$args_file")"
@@ -936,7 +936,7 @@ test_rodin_wrapper_detects_mac_app_bundle_install() {
         cd "$models_dir" \
             && RODIN_DIR="$rodin_dir" DISPLAY=:0 RODIN_SKIP_GUI_CHECK=1 \
                 PATH="$tmpbin:$PATH" \
-                "$ROOT_DIR/rodin" build 2>&1
+                "$ROOT_DIR/rodin-headless" build 2>&1
     )"
     status=$?
     set -e
@@ -1608,7 +1608,7 @@ setup_installer_fixture() {
 }
 
 run_installer() {
-    PATH="$INSTALLER_TMPBIN:$PATH" "$ROOT_DIR/rodin-install.sh" "$@"
+    PATH="$INSTALLER_TMPBIN:$PATH" "$ROOT_DIR/rodin-headless-install" "$@"
 }
 
 install_rodin_fixture() {
@@ -1630,7 +1630,7 @@ test_installer_check_deps_works_without_home() {
     # Purely diagnostic: must report even where the default prefix is
     # underivable, with only the probcli line degraded.
     set +e
-    output="$(HOME='' RODIN_PREFIX='' "$ROOT_DIR/rodin-install.sh" --check-deps 2>&1)"
+    output="$(HOME='' RODIN_PREFIX='' "$ROOT_DIR/rodin-headless-install" --check-deps 2>&1)"
     set -e
 
     assert_contains "$output" "Runtime dependencies" \
@@ -1650,7 +1650,7 @@ test_installer_check_deps_reports_missing_tools() {
     set +e
     output="$(
         unset DISPLAY
-        PATH="$minbin" "$ROOT_DIR/rodin-install.sh" --check-deps 2>&1
+        PATH="$minbin" "$ROOT_DIR/rodin-headless-install" --check-deps 2>&1
     )"
     status=$?
     set -e
@@ -1670,7 +1670,7 @@ test_installer_check_deps_reports_missing_tools() {
 
 test_installer_rejects_tarball_without_version() {
     assert_fails_with "requires a specific --rodin-version" \
-        "$ROOT_DIR/rodin-install.sh" --rodin-tarball rodin-3.9-linux.gtk.x86_64.tar.gz
+        "$ROOT_DIR/rodin-headless-install" --rodin-tarball rodin-3.9-linux.gtk.x86_64.tar.gz
 }
 
 test_installer_installs_rodin_phase() {
@@ -1718,7 +1718,7 @@ test_installer_refuses_foreign_target_dir() {
     : > "$INSTALLER_PREFIX/rodin/precious.txt"
 
     assert_fails_with "Refusing to overwrite" \
-        env PATH="$INSTALLER_TMPBIN:$PATH" "$ROOT_DIR/rodin-install.sh" \
+        env PATH="$INSTALLER_TMPBIN:$PATH" "$ROOT_DIR/rodin-headless-install" \
             --prefix "$INSTALLER_PREFIX" --only rodin \
             --rodin-version 3.9 --rodin-tarball rodin-3.9-linux.gtk.x86_64.tar.gz
     if [ ! -f "$INSTALLER_PREFIX/rodin/precious.txt" ]; then
@@ -1851,7 +1851,7 @@ test_dockerfile_installs_headless_helper() {
     assert_contains "$dockerfile" "/usr/local/bin/" \
         "Dockerfile should install the headless scripts in /usr/local/bin"
     assert_contains "$dockerfile" \
-        "COPY --chmod=755 rodin-install.sh rodin-version.sh rodin-headless-lib.sh" \
+        "COPY --chmod=755 rodin-headless-install rodin-version.sh rodin-headless-lib.sh" \
         "Dockerfile should copy the installer before the Rodin phase"
     assert_contains "$dockerfile" \
         "COPY --chmod=755 prob-version.sh /tmp/install/" \

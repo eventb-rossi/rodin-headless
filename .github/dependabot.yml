@@ -15,7 +15,7 @@ updates:
     schedule:
       interval: weekly
     ignore:
-      # Stay on JDK 21 (rodin-install.sh requires 17+, the image targets 21):
+      # Stay on JDK 21 (rodin-headless-install requires 17+, the image targets 21):
       # allow patch/minor/base-image refreshes but not 21 -> 22.
       - dependency-name: "*eclipse-temurin"
         update-types: ["version-update:semver-major"]

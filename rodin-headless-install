@@ -8,9 +8,9 @@
 # Run with --help for the option list.
 #
 # Examples:
-#   ./rodin-install.sh                         # full install to ~/.local/share
-#   ./rodin-install.sh --prefix /opt           # what the Docker image does
-#   ./rodin-install.sh --only rodin --rodin-version 3.9
+#   rodin-headless-install                     # full install to ~/.local/share
+#   rodin-headless-install --prefix /opt       # what the Docker image does
+#   rodin-headless-install --only rodin --rodin-version 3.9
 
 set -euo pipefail
 
@@ -46,7 +46,7 @@ CHECK_DEPS=0
 
 usage() {
     cat <<'EOF'
-Usage: ./rodin-install.sh [options]
+Usage: rodin-headless-install [options]
 
 Options:
   --prefix DIR       Install prefix (default: $RODIN_PREFIX or
@@ -288,7 +288,7 @@ require_supported_platform() {
     # rodin_platform owns the supported-platform matrix and rejects
     # unsupported hosts and bad RODIN_PLATFORM overrides alike.
     if ! rodin_platform >/dev/null; then
-        echo "Use an amd64 container instead (the ./rodin wrapper sets --platform linux/amd64 on arm64 hosts)." >&2
+        echo "Use an amd64 container instead (the rodin-headless wrapper sets --platform linux/amd64 on arm64 hosts)." >&2
         exit 1
     fi
 }
@@ -457,6 +457,6 @@ esac
 if [ "$ONLY" != rodin ]; then
     echo
     echo "Done. Next steps:"
-    echo "  ./rodin build model.zip                # wrapper auto-detects this install"
+    echo "  rodin-headless build model.zip         # wrapper auto-detects this install"
     echo "  $0 --check-deps                        # verify system dependencies"
 fi

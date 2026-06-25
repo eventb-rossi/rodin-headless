@@ -37,7 +37,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Install Rodin + ProB via the shared installer ───────────────────
-# The same rodin-install.sh works natively; the image just runs it with
+# The same rodin-headless-install works natively; the image just runs it with
 # --prefix /opt. Two RUN layers keep the large Rodin download cached
 # independently of the ProB layer.
 # RODIN_VERSION: "latest" (default), "latest-rc", or a specific version like "3.9"
@@ -49,16 +49,16 @@ ARG PROB_VERSION=latest
 
 # Two COPYs so a prob-version.sh edit does not invalidate the cached
 # Rodin download layer.
-COPY --chmod=755 rodin-install.sh rodin-version.sh rodin-headless-lib.sh \
+COPY --chmod=755 rodin-headless-install rodin-version.sh rodin-headless-lib.sh \
     /tmp/install/
 
-RUN /tmp/install/rodin-install.sh --prefix /opt --only rodin \
+RUN /tmp/install/rodin-headless-install --prefix /opt --only rodin \
         --rodin-version "$RODIN_VERSION" \
         ${RODIN_TARBALL:+--rodin-tarball "$RODIN_TARBALL"}
 
 COPY --chmod=755 prob-version.sh /tmp/install/
 
-RUN /tmp/install/rodin-install.sh --prefix /opt --only prob \
+RUN /tmp/install/rodin-headless-install --prefix /opt --only prob \
         --prob-version "$PROB_VERSION" \
     && ln -s /opt/prob/probcli /usr/local/bin/probcli \
     && rm -rf /tmp/install

@@ -164,7 +164,7 @@ RODIN_PLUGINS="$RODIN_HOME/plugins"
 PROB_CORE_DIR="$(find_prob_plugin "$RODIN_DIR")"
 if [ -z "$PROB_CORE_DIR" ]; then
     echo "ERROR: ProB Rodin plugin not installed in $RODIN_DIR" >&2
-    echo "Run ./rodin-install.sh to install it" >&2
+    echo "Run rodin-headless-install to install it" >&2
     exit 1
 fi
 
@@ -173,7 +173,7 @@ fi
 # logged-in graphical session (ssh, CI, cron).
 if ! darwin_gui_session_ok; then
     echo "ERROR: native Rodin on macOS needs a logged-in graphical (Aqua) session" >&2
-    echo "Run from a desktop session, run via the ./rodin wrapper (it falls back to a container), or set RODIN_SKIP_GUI_CHECK=1 to try anyway" >&2
+    echo "Run from a desktop session, run via the rodin-headless wrapper (it falls back to a container), or set RODIN_SKIP_GUI_CHECK=1 to try anyway" >&2
     exit 1
 fi
 

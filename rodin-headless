@@ -5,13 +5,13 @@
 # (RODIN_IMAGE, default ghcr.io/eventb-rossi/rodin-headless:latest), building
 # locally only when the pull fails or RODIN_BUILD_LOCAL=1 is set.
 #
-# Usage: ./rodin <command> [args...]
+# Usage: rodin-headless <command> [args...]
 #   Commands are the same in both modes (build, check, prove, validate,
-#   autoprove, probcli, help). See ./rodin help for details.
+#   autoprove, probcli, help). See rodin-headless help for details.
 #
 # Runtime selection (RODIN_RUNTIME=auto|native|docker|podman, default auto):
 #   1. RODIN_DIR pointing at a Rodin install (rodin.ini present) -> native
-#   2. ./rodin-install.sh default prefix install                 -> native
+#   2. rodin-headless-install default prefix install             -> native
 #   3. docker or podman available                                -> container
 # Set RODIN_RUNTIME=docker (or podman) to skip native detection.
 
@@ -123,7 +123,7 @@ case "$RODIN_RUNTIME" in
         fi
         if [ "$RODIN_RUNTIME" = native ]; then
             echo "Error: no native Rodin install found" >&2
-            echo "Run ./rodin-install.sh, or point RODIN_DIR at a Rodin install" >&2
+            echo "Run rodin-headless-install, or point RODIN_DIR at a Rodin install" >&2
             exit 1
         fi
         ;;
@@ -147,7 +147,7 @@ if [ -z "$RUNTIME" ]; then
     elif command -v podman >/dev/null 2>&1; then
         RUNTIME=podman
     else
-        echo "Error: docker or podman required (or run ./rodin-install.sh for a native install)" >&2
+        echo "Error: docker or podman required (or run rodin-headless-install for a native install)" >&2
         exit 1
     fi
 fi

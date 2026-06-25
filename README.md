@@ -10,17 +10,17 @@ Headless toolchain for building, model-checking, and proving [Rodin](https://wik
 git clone https://github.com/eventb-rossi/rodin-headless.git
 cd rodin-headless
 
-./rodin my-model.zip
+./rodin-headless my-model.zip
 ```
 
-The `rodin` wrapper picks a runtime automatically: a native Rodin install if one is present, otherwise the Docker image. In container mode it pulls the prebuilt image published to GHCR (`ghcr.io/eventb-rossi/rodin-headless:latest`) on first run, falling back to a local `docker build` when the pull is unavailable (offline). The current directory is mounted and built artifacts are written back into the zip in-place.
+The `rodin-headless` wrapper picks a runtime automatically: a native Rodin install if one is present, otherwise the Docker image. In container mode it pulls the prebuilt image published to GHCR (`ghcr.io/eventb-rossi/rodin-headless:latest`) on first run, falling back to a local `docker build` when the pull is unavailable (offline). The current directory is mounted and built artifacts are written back into the zip in-place.
 
 ### Native install (Linux x86_64, macOS)
 
 ```bash
-./rodin-install.sh --check-deps   # report missing system packages
-./rodin-install.sh                # install Rodin + ProB + plugins
-./rodin my-model.zip              # now runs without Docker
+./rodin-headless-install --check-deps   # report missing system packages
+./rodin-headless-install                # install Rodin + ProB + plugins
+./rodin-headless my-model.zip              # now runs without Docker
 ```
 
 The installer downloads Rodin and the ProB CLI, points `rodin.ini` at your JVM, and installs the ProB/SMT/Atelier B Rodin plugins — into `~/.local/share/rodin-headless` by default (override with `--prefix DIR` or `RODIN_PREFIX`). It never uses sudo; system packages (JDK 21+, GTK3, Xvfb, zip/unzip) are reported by `--check-deps` with install hints instead.
@@ -30,7 +30,7 @@ On macOS the only prerequisite is a JDK 21+ (e.g. Temurin) — everything else s
 Native macOS additionally requires a logged-in graphical (Aqua) session — SWT's Cocoa port blocks on WindowServer without one. Over ssh/CI/cron the wrapper detects this and falls back to the container runtime automatically; a forced `RODIN_RUNTIME=native` run fails in seconds with a clear error instead of hanging until the build timeout. Set `RODIN_SKIP_GUI_CHECK=1` to bypass the probe if it ever misdetects your session.
 
 ```bash
-./rodin-install.sh [--prefix DIR] [--only rodin|prob] [--force]
+./rodin-headless-install [--prefix DIR] [--only rodin|prob] [--force]
                    [--rodin-version V] [--rodin-tarball F] [--prob-version V]
                    [--check-deps]
 ```
@@ -40,7 +40,7 @@ Re-running is safe: completed phases are skipped unless `--force` is given.
 ## Commands
 
 ```bash
-./rodin <command> [args...]
+./rodin-headless <command> [args...]
 ```
 
 | Command | Description |
@@ -54,12 +54,12 @@ Re-running is safe: completed phases are skipped unless `--force` is given.
 | `help` | Show available commands |
 
 If no command is given, `build` is assumed.
-`./rodin help` is handled locally and does not require a native install, Docker, podman, or a prebuilt image.
+`./rodin-headless help` is handled locally and does not require a native install, Docker, podman, or a prebuilt image.
 
 Every model command prints a per-component static-check summary after the build and accepts `--strict` (anywhere after the command word): with it, the run exits non-zero when any component fails Rodin's static check — or was never checked, which includes archives carrying more than one project (the extras would be dropped unchecked, so strict rejects the archive) — instead of the exit code only reflecting whether Rodin launched. Without `--strict` the summary is informational and consumers can keep parsing `org.eventb.core.accurate` from the repackaged `.bcm`/`.bcc` files.
 
 ```bash
-./rodin build --strict model.zip   # exit 1 if the model does not statically check
+./rodin-headless build --strict model.zip   # exit 1 if the model does not statically check
 ```
 
 ## Runtime Selection
@@ -67,14 +67,14 @@ Every model command prints a per-component static-check summary after the build 
 The wrapper resolves the runtime in this order (`RODIN_RUNTIME=auto`, the default):
 
 1. `RODIN_DIR` pointing at a Rodin install (`rodin.ini` present) → native
-2. An `./rodin-install.sh` install under the default prefix → native
+2. An `./rodin-headless-install` install under the default prefix → native
 3. docker or podman available → container
 
 Force a specific runtime with `RODIN_RUNTIME=native`, `RODIN_RUNTIME=docker`, or `RODIN_RUNTIME=podman`:
 
 ```bash
-RODIN_RUNTIME=docker ./rodin build model.zip   # skip native detection
-RODIN_RUNTIME=native ./rodin check model.zip   # fail if no native install
+RODIN_RUNTIME=docker ./rodin-headless build model.zip   # skip native detection
+RODIN_RUNTIME=native ./rodin-headless check model.zip   # fail if no native install
 ```
 
 In native mode the wrapper exports `RODIN_DIR`, uses the current directory as the models directory, and puts the sibling `prob/` directory on `PATH` for `probcli`.
@@ -89,10 +89,10 @@ On Apple Silicon this means there is currently no fast unattended path: the cont
 
 ```bash
 # Build all .zip models in current directory
-./rodin
+./rodin-headless
 
 # Build specific models
-./rodin build model1.zip model2.zip
+./rodin-headless build model1.zip model2.zip
 ```
 
 If no matching archives are found, the wrapper exits non-zero instead of succeeding as a no-op.
@@ -106,28 +106,28 @@ runtimes; in Docker mode the wrapper forwards them into the container.
 
 ```bash
 # Model check (bounded state space exploration, 1000 states)
-./rodin check model.zip
+./rodin-headless check model.zip
 
 # Constraint-based invariant proving (tests inductiveness)
-./rodin prove model.zip
+./rodin-headless prove model.zip
 
 # Full validation (invariants + deadlock + assertions)
-./rodin validate model.zip
+./rodin-headless validate model.zip
 
 # Custom probcli invocation
-./rodin probcli model.eventb -mc 5000 -nodead
+./rodin-headless probcli model.eventb -mc 5000 -nodead
 ```
 
 ### Auto-prove proof obligations
 
 ```bash
 # Discharge POs using SMT solvers (Z3, CVC5, veriT) and Atelier B provers (PP, ML)
-./rodin autoprove model.zip
+./rodin-headless autoprove model.zip
 ```
 
 ### SELinux / Podman
 
-In Docker mode the `rodin` wrapper auto-detects SELinux and applies the `:Z` volume flag. Docker and podman are both supported.
+In Docker mode the `rodin-headless` wrapper auto-detects SELinux and applies the `:Z` volume flag. Docker and podman are both supported.
 
 With a rootful engine (the typical Linux Docker daemon) the wrapper runs the container as the invoking user (`--user` with `HOME=/tmp`), so the repackaged zips in the mounted directory come back owned by you instead of root. Rootless podman/docker already map container root to the host user and are left alone.
 
@@ -151,7 +151,7 @@ export RODIN_DIR=/opt/rodin MODELS_DIR=./models
 ./rodin-headless.sh model1.zip
 ```
 
-The Rodin install must have the ProB plugin (`de.prob.core`) — a stock Rodin download does not; `./rodin-install.sh` sets one up correctly. The installation itself is never written to: each run registers its transient builder plugin in a private temporary Equinox configuration area, so concurrent runs against the same install cannot clobber one another, and even a hard kill leaves the install pristine. (Concurrent runs over the *same* zip still race on repackaging.)
+The Rodin install must have the ProB plugin (`de.prob.core`) — a stock Rodin download does not; `./rodin-headless-install` sets one up correctly. The installation itself is never written to: each run registers its transient builder plugin in a private temporary Equinox configuration area, so concurrent runs against the same install cannot clobber one another, and even a hard kill leaves the install pristine. (Concurrent runs over the *same* zip still race on repackaging.)
 
 ## What It Does
 
@@ -173,7 +173,7 @@ docker pull ghcr.io/eventb-rossi/rodin-headless:latest
 docker run --rm -v "$PWD:/models" ghcr.io/eventb-rossi/rodin-headless build model.zip
 ```
 
-The `rodin` wrapper uses this image by default in container mode. Two environment variables tune that behavior:
+The `rodin-headless` wrapper uses this image by default in container mode. Two environment variables tune that behavior:
 
 - `RODIN_IMAGE` — override the image ref (default `ghcr.io/eventb-rossi/rodin-headless:latest`), e.g. to pin a datestamped tag or point at a fork.
 - `RODIN_BUILD_LOCAL=1` — skip the pull and always build from the local Dockerfile (useful when iterating on it).
@@ -182,7 +182,7 @@ Tags: `latest` (rolling — moved by pushes to `main` and the weekly canary), `Y
 
 ### Building locally
 
-The Dockerfile is a thin layer: it installs the system packages (GTK3/X11, Xvfb, JDK, zip, SMT solvers) and runs the same `rodin-install.sh` with `--prefix /opt`.
+The Dockerfile is a thin layer: it installs the system packages (GTK3/X11, Xvfb, JDK, zip, SMT solvers) and runs the same `rodin-headless-install` with `--prefix /opt`.
 
 | Component | Version |
 |-----------|---------|
@@ -208,19 +208,19 @@ By default the latest stable Rodin version published on SourceForge is auto-dete
 
 ```bash
 # Latest stable (default)
-./rodin-install.sh
+./rodin-headless-install
 docker build -t rodin-headless .
 
 # Latest release candidate
-./rodin-install.sh --rodin-version latest-rc
+./rodin-headless-install --rodin-version latest-rc
 docker build --build-arg RODIN_VERSION=latest-rc -t rodin-headless .
 
 # Specific version
-./rodin-install.sh --rodin-version 3.8
+./rodin-headless-install --rodin-version 3.8
 docker build --build-arg RODIN_VERSION=3.8 -t rodin-headless .
 
 # Fully pinned (skip auto-detection)
-./rodin-install.sh --rodin-version 3.9 \
+./rodin-headless-install --rodin-version 3.9 \
     --rodin-tarball rodin-3.9.0.202406100806-9b87fe13d-linux.gtk.x86_64.tar.gz
 docker build \
   --build-arg RODIN_VERSION=3.9 \
@@ -240,7 +240,7 @@ docker build --platform linux/amd64 -t rodin-headless .
 podman build --platform linux/amd64 -t rodin-headless .
 ```
 
-The `./rodin` wrapper applies this platform flag automatically when it builds
+The `./rodin-headless` wrapper applies this platform flag automatically when it builds
 and runs the image on macOS ARM64.
 
 ### Apple Silicon expectations

@@ -41,6 +41,16 @@ fi
 SCRIPT_DIR="$RODIN_HEADLESS_LIBEXEC"
 # shellcheck source=rodin-headless-lib.sh
 . "$RODIN_HEADLESS_LIBEXEC/rodin-headless-lib.sh"
+
+# The local-image build needs the Dockerfile and the scripts it COPYs.
+# `make install` rewrites this sentinel to $datadir/rodin-headless, where
+# those files are shipped; the flat checkout and any unsubstituted install
+# fall back to the libexec dir (the repo root in dev), which also holds the
+# Dockerfile.
+: "${RODIN_HEADLESS_DATADIR:=__RODIN_HEADLESS_DATADIR__}"
+if [ ! -f "$RODIN_HEADLESS_DATADIR/Dockerfile" ]; then
+    RODIN_HEADLESS_DATADIR="$RODIN_HEADLESS_LIBEXEC"
+fi
 PLATFORM_ARGS=()
 
 case "${1:-}" in
@@ -247,9 +257,22 @@ if image_needs_build; then
     if [ -z "${RODIN_BUILD_LOCAL:-}" ] \
         && "$RUNTIME" pull ${PLATFORM_ARGS[@]+"${PLATFORM_ARGS[@]}"} "$IMAGE"; then
         echo "Pulled prebuilt $IMAGE" >&2
-    else
+    elif [ -f "$RODIN_HEADLESS_DATADIR/Dockerfile" ]; then
         echo "Building $IMAGE image..." >&2
-        "$RUNTIME" build ${PLATFORM_ARGS[@]+"${PLATFORM_ARGS[@]}"} -t "$IMAGE" "$SCRIPT_DIR"
+        "$RUNTIME" build ${PLATFORM_ARGS[@]+"${PLATFORM_ARGS[@]}"} -t "$IMAGE" "$RODIN_HEADLESS_DATADIR"
+    elif [ -n "${RODIN_BUILD_LOCAL:-}" ]; then
+        # The user opted out of the pull but this install ships no build
+        # context, so there is nothing to build from — say so plainly
+        # instead of blaming connectivity.
+        echo "Error: RODIN_BUILD_LOCAL=1 but no Dockerfile build context is shipped with this install." >&2
+        echo "       Unset RODIN_BUILD_LOCAL to pull the prebuilt image, or run from a source checkout." >&2
+        exit 1
+    else
+        # Pull failed and there is no build context: the prebuilt image is
+        # the supported path for a packaged install, so fail clearly.
+        echo "Error: cannot obtain $IMAGE — the pull failed and no Dockerfile build context is available." >&2
+        echo "       Check connectivity and retry, or set RODIN_IMAGE to an image that can be pulled." >&2
+        exit 1
     fi
 fi
 

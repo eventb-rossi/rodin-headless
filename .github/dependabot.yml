@@ -4,10 +4,14 @@ updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
     groups:
-      actions:
+      github-actions:
         patterns: ["*"]        # one grouped PR instead of one-per-action
+    commit-message:
+      prefix: ci
+    labels:
+      - dependencies
 
   # Track the Dockerfile base image (eclipse-temurin).
   - package-ecosystem: docker

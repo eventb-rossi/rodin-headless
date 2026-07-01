@@ -70,7 +70,7 @@ sudo dnf install rodin-headless
 
 The installer downloads Rodin and the ProB CLI, points `rodin.ini` at your JVM, and installs the ProB/SMT/Atelier B Rodin plugins — into `~/.local/share/rodin-headless` by default (override with `--prefix DIR` or `RODIN_PREFIX`). It never uses sudo; system packages (JDK 21+, GTK3, Xvfb, zip/unzip) are reported by `--check-deps` with install hints instead.
 
-On macOS the only prerequisite is a JDK 21+ (e.g. Temurin) — everything else ships with the system, and the engine has a built-in fallback for the GNU `timeout` tool. Apple Silicon needs Rodin 3.10 or later, the first release with arm64 mac builds; until 3.10 final ships, install it with `--rodin-version latest-rc` (3.9 mac builds are x86_64-only and are never selected on arm64).
+On macOS the only prerequisite is a JDK 21+ (e.g. Temurin) — everything else ships with the system, and the engine has a built-in fallback for the GNU `timeout` tool. Apple Silicon needs Rodin 3.10 or later, the first release with arm64 mac builds; the default `latest` now selects it (3.9 and earlier mac builds are x86_64-only and are never chosen on arm64).
 
 Native macOS additionally requires a logged-in graphical (Aqua) session — SWT's Cocoa port blocks on WindowServer without one. Over ssh/CI/cron the wrapper detects this and falls back to the container runtime automatically; a forced `RODIN_RUNTIME=native` run fails in seconds with a clear error instead of hanging until the build timeout. Set `RODIN_SKIP_GUI_CHECK=1` to bypass the probe if it ever misdetects your session.
 
@@ -308,11 +308,11 @@ docker build --build-arg RODIN_VERSION=latest-rc -t rodin-headless .
 docker build --build-arg RODIN_VERSION=3.8 -t rodin-headless .
 
 # Fully pinned (skip auto-detection)
-./rodin-headless-install --rodin-version 3.9 \
-    --rodin-tarball rodin-3.9.0.202406100806-9b87fe13d-linux.gtk.x86_64.tar.gz
+./rodin-headless-install --rodin-version 3.10 \
+    --rodin-tarball rodin-3.10.0.202607010932-881664d81-linux.gtk.x86_64.tar.gz
 docker build \
-  --build-arg RODIN_VERSION=3.9 \
-  --build-arg RODIN_TARBALL=rodin-3.9.0.202406100806-9b87fe13d-linux.gtk.x86_64.tar.gz \
+  --build-arg RODIN_VERSION=3.10 \
+  --build-arg RODIN_TARBALL=rodin-3.10.0.202607010932-881664d81-linux.gtk.x86_64.tar.gz \
   -t rodin-headless .
 ```
 

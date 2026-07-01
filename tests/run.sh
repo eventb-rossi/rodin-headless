@@ -353,11 +353,11 @@ set -euo pipefail
 url="${@: -1}"
 
 case "$url" in
-    */Core_Rodin_Platform/3.10-RC2/)
+    */Core_Rodin_Platform/3.10/)
         cat <<'OUT'
-rodin-3.10.0-RC2-linux.gtk.x86_64.tar.gz
-rodin-3.10.0-RC2-macosx.cocoa.aarch64.tar.gz
-rodin-3.10.0-RC2-macosx.cocoa.x86_64.tar.gz
+rodin-3.10.0-linux.gtk.x86_64.tar.gz
+rodin-3.10.0-macosx.cocoa.aarch64.tar.gz
+rodin-3.10.0-macosx.cocoa.x86_64.tar.gz
 OUT
         ;;
     */Core_Rodin_Platform/3.9/)
@@ -375,9 +375,9 @@ EOF
     chmod +x "$tmpbin/curl"
 
     aarch64_output="$(RODIN_PLATFORM=macos-aarch64 PATH="$tmpbin:$PATH" \
-        "$ROOT_DIR/rodin-version.sh" 3.10-RC2)"
+        "$ROOT_DIR/rodin-version.sh" 3.10)"
     assert_contains "$aarch64_output" \
-        "export RODIN_TARBALL='rodin-3.10.0-RC2-macosx.cocoa.aarch64.tar.gz'" \
+        "export RODIN_TARBALL='rodin-3.10.0-macosx.cocoa.aarch64.tar.gz'" \
         "rodin-version should select the arm64 mac tarball on macos-aarch64"
 
     x86_64_output="$(RODIN_PLATFORM=macos-x86_64 PATH="$tmpbin:$PATH" \
@@ -1620,8 +1620,8 @@ install_darwin_rodin_fixture() {
     INSTALLER_TEST_OS=Darwin INSTALLER_TEST_ARCH=arm64 \
     INSTALLER_TEST_RODIN_TARBALL="$INSTALLER_TEST_RODIN_MAC_TARBALL" \
         run_installer --prefix "$INSTALLER_PREFIX" --only rodin \
-            --rodin-version 3.10-RC2 \
-            --rodin-tarball rodin-3.10.0-RC2-macosx.cocoa.aarch64.tar.gz
+            --rodin-version 3.10 \
+            --rodin-tarball rodin-3.10.0-macosx.cocoa.aarch64.tar.gz
 }
 
 test_installer_check_deps_works_without_home() {

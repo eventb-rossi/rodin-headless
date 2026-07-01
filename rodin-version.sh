@@ -12,8 +12,8 @@
 # macos-x86_64, macos-aarch64) overrides the detection.
 #
 # Output (eval-friendly):
-#   export RODIN_VERSION='3.9'
-#   export RODIN_TARBALL='rodin-3.9.0...-linux.gtk.x86_64.tar.gz'
+#   export RODIN_VERSION='3.10'
+#   export RODIN_TARBALL='rodin-3.10.0...-linux.gtk.x86_64.tar.gz'
 #   export RODIN_URL='https://sourceforge.net/.../download'
 
 set -euo pipefail
@@ -95,7 +95,7 @@ fi
 if [ -z "$TARBALL" ]; then
     echo "ERROR: Could not find $PLATFORM tarball for Rodin $VERSION" >&2
     if [ "$PLATFORM" = macos-aarch64 ]; then
-        echo "Rodin ships macOS arm64 builds from 3.10 on (3.9 is x86_64-only); use --rodin-version latest-rc or 3.10+" >&2
+        echo "Rodin ships macOS arm64 builds from 3.10 on (3.9 is x86_64-only); use --rodin-version latest or 3.10+" >&2
     fi
     exit 1
 fi

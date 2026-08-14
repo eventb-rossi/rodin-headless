@@ -44,7 +44,7 @@ jobs:
           echo "PKG=$PKG" >> "$GITHUB_ENV"
 
       - name: Upload tarball to the release
-        run: gh release upload "$TAG" "$PKG.tar.gz" --clobber
+        run: gh release upload "$TAG" "$PKG.tar.gz" --clobber --repo "$GITHUB_REPOSITORY"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -71,7 +71,7 @@ jobs:
         run: sha256sum rodin-headless-*.tar.gz > SHA256SUMS
 
       - name: Upload SHA256SUMS to the release
-        run: gh release upload "$TAG" SHA256SUMS --clobber
+        run: gh release upload "$TAG" SHA256SUMS --clobber --repo "$GITHUB_REPOSITORY"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

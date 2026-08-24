@@ -1553,15 +1553,34 @@ set -euo pipefail
 
 target=""
 url=""
+resume=no
 while [ $# -gt 0 ]; do
     case "$1" in
         -o) target="$2"; shift 2 ;;
+        -C) resume=yes; shift 2 ;;
         -*) shift ;;
         *)  url="$1"; shift ;;
     esac
 done
 
-printf '%s\n' "$url" >> "$INSTALLER_TEST_CURL_LOG"
+# One line per attempt, carrying whether it asked to resume.
+printf '%s resume=%s\n' "$url" "$resume" >> "$INSTALLER_TEST_CURL_LOG"
+
+# Failure injection: INSTALLER_TEST_CURL_FAIL_CODES is a per-attempt list
+# of curl exit codes (18 = closed mid-body, 33 = mirror refuses ranges);
+# an attempt past the end of the list succeeds. Unset for every test that
+# is not exercising the retry loop.
+if [ -n "${INSTALLER_TEST_CURL_FAIL_CODES:-}" ]; then
+    read -r -a fail_codes <<< "$INSTALLER_TEST_CURL_FAIL_CODES"
+    attempt="$(grep -cF -- "$url " "$INSTALLER_TEST_CURL_LOG")"
+    code="${fail_codes[$((attempt - 1))]:-0}"
+    if [ "$code" != 0 ]; then
+        # A mid-body failure leaves the partial bytes behind, like curl.
+        [ "$code" = 18 ] && printf 'partial' >> "$target"
+        printf 'curl: (%s) simulated transfer failure\n' "$code" >&2
+        exit "$code"
+    fi
+fi
 
 case "$url" in
     *rodin*) cp "$INSTALLER_TEST_RODIN_TARBALL" "$target" ;;
@@ -1577,10 +1596,14 @@ EOF
 printf '<%s>\n' "$@" >> "$INSTALLER_TEST_JAVA_ARGS"
 exit 0
 EOF
+    # The installer's retry backoff is real time the suite need not
+    # spend; stubbing sleep keeps the production script free of a
+    # test-only delay knob.
+    printf '#!/bin/sh\nexit 0\n' > "$tmpbin/sleep"
     # Pin the platform the installer sees, so the suite runs on any
     # host; tests override via INSTALLER_TEST_OS/INSTALLER_TEST_ARCH.
     make_uname_stub "$tmpbin" Linux x86_64
-    chmod +x "$tmpbin/curl" "$tmpbin/java"
+    chmod +x "$tmpbin/curl" "$tmpbin/java" "$tmpbin/sleep"
 }
 
 # The fixtures and stubs are immutable, so they are built once for the
@@ -1691,6 +1714,46 @@ test_installer_installs_rodin_phase() {
     assert_contains "$(cat "$INSTALLER_TEST_CURL_LOG")" \
         "Core_Rodin_Platform/3.9/rodin-3.9-linux.gtk.x86_64.tar.gz" \
         "installer should download the pinned tarball without version detection"
+}
+
+test_installer_retries_a_truncated_download() {
+    setup_installer_fixture
+
+    # The first attempt dies mid-transfer; the retry succeeds.
+    local output status
+    set +e
+    output="$(INSTALLER_TEST_CURL_FAIL_CODES=18 install_rodin_fixture 2>&1)"
+    status=$?
+    set -e
+
+    assert_eq "0" "$status" \
+        "installer should recover from a truncated download"
+    assert_contains "$output" "retrying" \
+        "installer should report the retry"
+    assert_eq "2" "$(wc -l < "$INSTALLER_TEST_CURL_LOG" | tr -d ' ')" \
+        "a truncated download should be attempted exactly twice"
+    assert_eq "resume=yes" "$(sed -n '2s/.* //p' "$INSTALLER_TEST_CURL_LOG")" \
+        "the retry should resume the partial file rather than restart it"
+}
+
+test_installer_restarts_when_a_mirror_refuses_ranges() {
+    setup_installer_fixture
+
+    # Mid-body close, then a mirror that rejects the resume request.
+    INSTALLER_TEST_CURL_FAIL_CODES="18 33" install_rodin_fixture > /dev/null 2>&1
+
+    assert_eq "resume=no" "$(sed -n '3s/.* //p' "$INSTALLER_TEST_CURL_LOG")" \
+        "after a rejected range the next attempt should restart from zero"
+}
+
+test_installer_gives_up_after_repeated_download_failures() {
+    setup_installer_fixture
+
+    # Every attempt dies: the installer must fail rather than loop.
+    INSTALLER_TEST_CURL_FAIL_CODES="18 18 18" \
+        assert_fails_with "download failed after 3 attempts" install_rodin_fixture
+    assert_eq "3" "$(wc -l < "$INSTALLER_TEST_CURL_LOG" | tr -d ' ')" \
+        "a download that never succeeds should stop at the attempt cap"
 }
 
 test_installer_rodin_phase_is_idempotent() {
@@ -1959,6 +2022,9 @@ main() {
     test_installer_check_deps_reports_missing_tools
     test_installer_rejects_tarball_without_version
     test_installer_installs_rodin_phase
+    test_installer_retries_a_truncated_download
+    test_installer_restarts_when_a_mirror_refuses_ranges
+    test_installer_gives_up_after_repeated_download_failures
     test_installer_rodin_phase_is_idempotent
     test_installer_refuses_foreign_target_dir
     test_installer_prob_phase_runs_p2_director

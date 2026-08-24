@@ -123,19 +123,69 @@ cleanup_tmp() {
 }
 trap cleanup_tmp EXIT
 
+# Downloads of >100 MB from SourceForge mirrors fail mid-body often
+# enough to matter (curl 18 / 22 / 56), and curl's own --retry does not
+# cover a connection closed mid-transfer — it only retries timeouts and
+# a fixed set of HTTP/FTP status codes. So the retry lives here, and it
+# is the only retry layer: an attempt that resumes beats curl's internal
+# retry, which starts the transfer over from byte zero.
+#
+# SourceForge hands out a mirror per request, so a retry usually lands
+# somewhere healthier than the one that died.
+DOWNLOAD_ATTEMPTS=3
+
+# Fetch $url into $archive, resuming across attempts. Returns curl's
+# last exit status once the attempts are exhausted.
+download_archive() {
+    local url="$1" archive="$2"
+    local attempt status delay opts
+
+    for (( attempt = 1; attempt <= DOWNLOAD_ATTEMPTS; attempt++ )); do
+        # Stall-based timeout instead of a tight --max-time cap: the
+        # tarballs are >100 MB and a slow mirror must not abort a
+        # transfer that is still making progress. The generous
+        # --max-time still bounds a pathological trickle (above the
+        # stall floor but going nowhere) so unattended builds fail
+        # instead of hanging for hours.
+        opts=(-fSL --connect-timeout 30
+              --speed-limit 1024 --speed-time 60 --max-time 3600)
+        # Pick up whatever a previous attempt left behind; a truncated
+        # file (see the 33 case below) starts over cleanly.
+        if [ -s "$archive" ]; then
+            opts+=(-C -)
+        fi
+
+        status=0
+        curl "${opts[@]}" -o "$archive" "$url" || status=$?
+        if [ "$status" -eq 0 ]; then
+            return 0
+        fi
+
+        # 33: the mirror ignored the Range request. Drop what we have so
+        # the next attempt starts over rather than wedging on a resume
+        # that this mirror will never honour.
+        if [ "$status" -eq 33 ]; then
+            : > "$archive"
+        fi
+
+        if [ "$attempt" -lt "$DOWNLOAD_ATTEMPTS" ]; then
+            delay=$(( 5 * attempt ))
+            echo "WARNING: download interrupted (curl exit $status), retrying in ${delay}s ($attempt/$DOWNLOAD_ATTEMPTS)" >&2
+            sleep "$delay"
+        fi
+    done
+
+    echo "ERROR: download failed after $DOWNLOAD_ATTEMPTS attempts (curl exit $status)" >&2
+    echo "       $url" >&2
+    return "$status"
+}
+
 fetch_and_unpack() {
     local url="$1" dest="$2" archive
 
     archive="$(mktemp /tmp/rodin-headless-dl.XXXXXX)"
     TMP_PATHS+=("$archive")
-    # Stall-based timeout instead of a tight --max-time cap: the
-    # tarballs are >100 MB and a slow mirror must not abort a transfer
-    # that is still making progress. The generous --max-time still
-    # bounds a pathological trickle (above the stall floor but going
-    # nowhere) so unattended builds fail instead of hanging for hours.
-    curl -fSL --retry 3 --retry-delay 5 --connect-timeout 30 \
-        --speed-limit 1024 --speed-time 60 --max-time 3600 \
-        -o "$archive" "$url"
+    download_archive "$url" "$archive"
     mkdir -p "$dest"
     case "$url" in
         *.zip)

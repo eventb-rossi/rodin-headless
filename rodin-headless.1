@@ -54,6 +54,17 @@ Build, then full ProB validation (invariants, deadlock, assertions).
 .B autoprove " [zips...]"
 Build, then discharge proof obligations with SMT and Atelier\ B tactics.
 .TP
+.B rewrite\-oracle " <requests>"
+Answer automatic\-rewriter requests from a file in the models directory,
+one per line in the form
+.IR "typenv TAB predicate" ,
+where the type environment is
+.I name=Type
+pairs joined by semicolons. Each answer line carries the predicate
+rewritten to the level\-5 fixpoint and the fired rewrite\-rule names.
+Runs a plain JVM against the AST and sequent\-prover jars \(em no
+workspace, Equinox, or ProB.
+.TP
 .B probcli " [args...]"
 Run
 .B probcli

@@ -1506,6 +1506,34 @@ test_rodin_headless_parses_proof_refresh_flags() {
         "the builder should read the recalculate property"
 }
 
+test_rodin_headless_rewrite_oracle_mode() {
+    local rodin_dir models_dir script
+    setup_engine_fixture
+
+    # The mode reaches its own argument validation (one request file,
+    # which must exist) once the generic selection accepted the args.
+    : > "$models_dir/requests.txt"
+    : > "$models_dir/more.txt"
+    assert_fails_with "ERROR: rewrite-oracle takes exactly one request file" \
+        run_engine --mode rewrite-oracle requests.txt more.txt
+
+    # The oracle is a plain-JVM driver against the AST and sequent
+    # prover jars only: no workspace, no Equinox app, no ProB
+    # requirement stands between the request file and the compile.
+    script="$(cat "$ROOT_DIR/rodin-headless.sh")"
+    assert_contains "$script" 'RewriteOracle.java' \
+        "the oracle should compile its plain-JVM driver"
+    assert_contains "$script" 'AutoRewriterImpl.DEBUG = true' \
+        "the oracle should enable the rewriter trace before construction"
+    assert_contains "$script" 'AutoRewrites.Level.L5' \
+        "the oracle should rewrite at the latest level"
+
+    # The dispatch table forwards the command word as a mode.
+    assert_contains "$(cat "$ROOT_DIR/entrypoint.sh")" \
+        '--mode rewrite-oracle' \
+        "the entrypoint should dispatch the rewrite-oracle command"
+}
+
 test_rodin_headless_strict_rejects_multi_project_archives() {
     local rodin_dir models_dir staging output
     setup_engine_fixture
@@ -2082,6 +2110,7 @@ main() {
     test_rodin_headless_parses_strict_flag
     test_rodin_headless_parses_auto_tactics_flag
     test_rodin_headless_parses_proof_refresh_flags
+    test_rodin_headless_rewrite_oracle_mode
     test_rodin_headless_strict_rejects_multi_project_archives
     test_validate_deadlock_check_uses_eventb_true_ast
     test_installer_check_deps_works_without_home

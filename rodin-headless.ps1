@@ -27,6 +27,9 @@ Commands:
   prove [zips...]                Build + CBC invariant checking with ProB
   validate [zips...]             Build + full ProB validation (invariants + deadlock + assertions)
   autoprove [zips...]            Build + auto-prove POs with SMT/Atelier B tactics
+  rewrite-oracle <requests>      Answer automatic-rewriter requests from a file
+                                 (one "typenv TAB predicate" per line; no
+                                 workspace or ProB involved)
   probcli [args...]              Run probcli directly
   help                           Show this help
 

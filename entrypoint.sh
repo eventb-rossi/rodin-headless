@@ -22,6 +22,9 @@ Commands:
   prove [zips...]                Build + CBC invariant checking with ProB
   validate [zips...]             Build + full ProB validation (invariants + deadlock + assertions)
   autoprove [zips...]            Build + auto-prove POs with SMT/Atelier B tactics
+  rewrite-oracle <requests>      Answer automatic-rewriter requests from a file
+                                 (one "typenv TAB predicate" per line; no
+                                 workspace or ProB involved)
   probcli [args...]              Run probcli directly
   help                           Show this help
 
@@ -63,6 +66,7 @@ case "${1:-}" in
     prove)    shift; exec "$SCRIPT_DIR/rodin-headless.sh" --mode prove "$@" ;;
     validate)  shift; exec "$SCRIPT_DIR/rodin-headless.sh" --mode validate "$@" ;;
     autoprove) shift; exec "$SCRIPT_DIR/rodin-headless.sh" --mode autoprove "$@" ;;
+    rewrite-oracle) shift; exec "$SCRIPT_DIR/rodin-headless.sh" --mode rewrite-oracle "$@" ;;
     probcli)   shift; run_probcli "$@" ;;
     --version|-V)
         # Sourced only here so the published image answers `--version`

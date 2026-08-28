@@ -138,6 +138,7 @@ library-location markers to the install paths.
 | `prove [zips...]` | Build + CBC invariant checking with ProB |
 | `validate [zips...]` | Build + full ProB validation (invariants + deadlock + assertions) |
 | `autoprove [zips...]` | Build + auto-prove POs with SMT/Atelier B tactics |
+| `rewrite-oracle <requests>` | Answer automatic-rewriter requests from a file (one `typenv TAB predicate` per line; plain JVM, no workspace or ProB) |
 | `probcli [args...]` | Run probcli directly with arbitrary arguments |
 | `help` | Show available commands |
 

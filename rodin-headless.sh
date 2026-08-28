@@ -179,6 +179,144 @@ fi
 
 RODIN_PLUGINS="$RODIN_HOME/plugins"
 
+# The rewrite-oracle mode never touches a workspace, Equinox, or ProB:
+# it compiles a tiny plain-JVM driver against the AST and sequent
+# prover jars and answers rewrite requests line by line. It branches
+# off here, after jar resolution but before the ProB requirement.
+run_rewrite_oracle() {
+    if [ $# -ne 1 ]; then
+        echo "ERROR: rewrite-oracle takes exactly one request file (in the models directory)" >&2
+        exit 1
+    fi
+    local request_file="$MODELS_DIR/$1"
+    if [ ! -f "$request_file" ]; then
+        echo "ERROR: request file $request_file not found" >&2
+        exit 1
+    fi
+
+    PLUGIN_DIR=$(mktemp -d)
+    cat > "$PLUGIN_DIR/RewriteOracle.java" << 'JAVA'
+import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
+import java.io.FileDescriptor;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.InputStreamReader;
+import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
+
+import org.eventb.core.ast.FormulaFactory;
+import org.eventb.core.ast.IParseResult;
+import org.eventb.core.ast.ITypeCheckResult;
+import org.eventb.core.ast.ITypeEnvironmentBuilder;
+import org.eventb.core.ast.Predicate;
+import org.eventb.internal.core.seqprover.eventbExtensions.rewriters.AutoRewriterImpl;
+import org.eventb.internal.core.seqprover.eventbExtensions.rewriters.AutoRewrites;
+
+/**
+ * Answers automatic-rewriter requests, one per input line:
+ *
+ *   [name=Type;name=Type...] TAB predicate
+ *
+ * For each request the predicate is parsed and type-checked in the
+ * given environment, then rewritten to the AutoRewriterImpl L5
+ * fixpoint exactly as AbstractAutoRewrites does. The response line is
+ *
+ *   OK TAB rewritten-predicate TAB rule,rule,...
+ *
+ * with the fired SIMP_*\/DEF_* names harvested from the rewriter's
+ * DEBUG trace (auto-flattening steps leave no trace, so the rule list
+ * is best-effort while the predicate is exact), or
+ *
+ *   ERR TAB message
+ */
+public class RewriteOracle {
+    public static void main(String[] args) throws Exception {
+        PrintStream realOut =
+                new PrintStream(new FileOutputStream(FileDescriptor.out), true, "UTF-8");
+        BufferedReader in = new BufferedReader(
+                new InputStreamReader(new FileInputStream(args[0]), StandardCharsets.UTF_8));
+        AutoRewriterImpl.DEBUG = true;
+        FormulaFactory ff = FormulaFactory.getDefault();
+        String line;
+        while ((line = in.readLine()) != null) {
+            if (line.isEmpty()) {
+                continue;
+            }
+            int tab = line.indexOf('\t');
+            String envPart = tab < 0 ? "" : line.substring(0, tab);
+            String predPart = tab < 0 ? line : line.substring(tab + 1);
+            ByteArrayOutputStream trace = new ByteArrayOutputStream();
+            try {
+                ITypeEnvironmentBuilder env = ff.makeTypeEnvironment();
+                if (!envPart.isEmpty()) {
+                    for (String pair : envPart.split(";")) {
+                        int eq = pair.indexOf('=');
+                        String name = pair.substring(0, eq);
+                        IParseResult tr = ff.parseType(pair.substring(eq + 1));
+                        if (tr.hasProblem()) {
+                            throw new Exception("type of " + name + ": " + tr.getProblems());
+                        }
+                        env.addName(name, tr.getParsedType());
+                    }
+                }
+                IParseResult pr = ff.parsePredicate(predPart, null);
+                if (pr.hasProblem()) {
+                    throw new Exception("parse: " + pr.getProblems());
+                }
+                Predicate pred = pr.getParsedPredicate();
+                ITypeCheckResult tc = pred.typeCheck(env);
+                if (tc.hasProblem()) {
+                    throw new Exception("typecheck: " + tc.getProblems());
+                }
+                System.setOut(new PrintStream(trace, true, "UTF-8"));
+                AutoRewriterImpl rewriter = new AutoRewriterImpl(AutoRewrites.Level.L5);
+                Predicate current = pred;
+                while (true) {
+                    Predicate next = current.rewrite(rewriter);
+                    if (next == current) {
+                        break;
+                    }
+                    current = next;
+                }
+                System.setOut(realOut);
+                StringBuilder rules = new StringBuilder();
+                for (String t : trace.toString("UTF-8").split("\n")) {
+                    int open = t.lastIndexOf("   (");
+                    if (!t.startsWith("AutoRewriter: ") || open < 0 || !t.endsWith(")")) {
+                        continue;
+                    }
+                    for (String r : t.substring(open + 4, t.length() - 1).split(" \\| ")) {
+                        if (rules.length() > 0) {
+                            rules.append(',');
+                        }
+                        rules.append(r);
+                    }
+                }
+                realOut.println("OK\t" + current + "\t" + rules);
+            } catch (Throwable e) {
+                System.setOut(realOut);
+                String msg = String.valueOf(e);
+                realOut.println("ERR\t" + msg.replace('\t', ' ').replace('\n', ' '));
+            }
+        }
+        realOut.flush();
+    }
+}
+JAVA
+
+    local ORACLE_CP
+    ORACLE_CP="$(resolve_latest_jar "$RODIN_PLUGINS" org.eventb.core.ast)"
+    ORACLE_CP="$ORACLE_CP:$(resolve_latest_jar "$RODIN_PLUGINS" org.eventb.core.seqprover)"
+    javac -cp "$ORACLE_CP" -d "$PLUGIN_DIR" "$PLUGIN_DIR/RewriteOracle.java"
+    java -cp "$ORACLE_CP:$PLUGIN_DIR" RewriteOracle "$request_file"
+}
+
+if [ "$BUILD_MODE" = "rewrite-oracle" ]; then
+    run_rewrite_oracle "${ZIPS[@]}"
+    exit $?
+fi
+
 # The builder plugin compiles against de.prob.core in every mode; fail
 # early with a hint instead of dying later in the classpath setup when
 # pointed at a bare Rodin install. The resolved directory is reused for

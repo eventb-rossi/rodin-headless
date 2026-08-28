@@ -1424,8 +1424,8 @@ test_rodin_headless_reports_static_check_accuracy() {
     # native-binary branch must keep passing the mode property (it was
     # silently dropped before this assertion existed).
     assert_contains "$script" '"-Drodinbuilder.mode=$BUILD_MODE" "-Drodinbuilder.strict=$STRICT_MODE"
-        "-Drodinbuilder.autotactics=$AUTO_TACTICS")' \
-        "the native-binary vmargs must carry the mode and auto-tactics properties too"
+        "-Drodinbuilder.autotactics=$AUTO_TACTICS" "-Drodinbuilder.recalculate=$RECALCULATE")' \
+        "the native-binary vmargs must carry the mode, tactics, and recalculate properties too"
 }
 
 test_rodin_headless_parses_strict_flag() {
@@ -1475,6 +1475,35 @@ test_rodin_headless_parses_auto_tactics_flag() {
         "auto-tactics off should disable the post-tactic as well"
     assert_contains "$script" 'rodinbuilder.autotactics' \
         "the builder should read the auto-tactics property"
+}
+
+test_rodin_headless_parses_proof_refresh_flags() {
+    local rodin_dir models_dir script
+    setup_engine_fixture
+
+    # Both flags parse anywhere; --recalculate additionally requires the
+    # autoprove mode, wherever --mode appears relative to it.
+    assert_fails_with "ERROR: No .zip archives found in $models_dir" \
+        run_engine --mode autoprove --recalculate
+    assert_fails_with "ERROR: No .zip archives found in $models_dir" \
+        run_engine --recalculate --mode autoprove
+    assert_fails_with "ERROR: No .zip archives found in $models_dir" \
+        run_engine --purge-proofs
+    assert_fails_with "ERROR: --recalculate is only valid with the autoprove command" \
+        run_engine --recalculate model.zip
+    assert_fails_with "ERROR: --recalculate is only valid with the autoprove command" \
+        run_engine --recalculate --mode check model.zip
+
+    script="$(cat "$ROOT_DIR/rodin-headless.sh")"
+    # The purge removes proof files from the workspace copy only, before
+    # the build; the recalculate branch feeds every status to Rodin's
+    # recalculate-auto-status pass instead of the undischarged subset.
+    assert_contains "$script" 'rm -f "$projdir"/*.bpr "$projdir"/*.bps' \
+        "purge-proofs should delete workspace .bpr and .bps files"
+    assert_contains "$script" 'EventBPlugin.recalculateAutoStatus(selected, new NullProgressMonitor())' \
+        "recalculate should call Rodin's recalculate-auto-status pass"
+    assert_contains "$script" 'rodinbuilder.recalculate' \
+        "the builder should read the recalculate property"
 }
 
 test_rodin_headless_strict_rejects_multi_project_archives() {
@@ -2052,6 +2081,7 @@ main() {
     test_rodin_headless_reports_static_check_accuracy
     test_rodin_headless_parses_strict_flag
     test_rodin_headless_parses_auto_tactics_flag
+    test_rodin_headless_parses_proof_refresh_flags
     test_rodin_headless_strict_rejects_multi_project_archives
     test_validate_deadlock_check_uses_eventb_true_ast
     test_installer_check_deps_works_without_home

@@ -79,6 +79,24 @@ and the proof\-status update \(em rewriting
 verdicts \(em but never invokes a prover. May appear anywhere after the
 command word.
 .TP
+.B \-\-recalculate
+Only with
+.BR autoprove :
+feed every proof obligation \(em not just the undischarged ones \(em to
+Rodin's recalculate\-auto\-status pass, which re\-proves each obligation
+and replaces the stored proof whenever the fresh attempt discharges it,
+re\-anchoring proofs to the current reasoner levels. Obligations the
+auto\-prover cannot re\-close keep their stored proofs.
+.TP
+.B \-\-purge\-proofs
+Drop all stored proofs and statuses
+.RI ( .bpr ", " .bps )
+from the workspace copy before building, so proving starts from an
+empty proof store. Combined with
+.B autoprove
+this yields archives whose proofs come exclusively from the current
+auto\-tactics.
+.TP
 .BR \-\-version ", " \-V
 Print the program version and exit.
 .SH ENVIRONMENT

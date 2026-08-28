@@ -219,6 +219,16 @@ runtimes; in Docker mode the wrapper forwards them into the container.
 ./rodin-headless autoprove model.zip
 ```
 
+By default `autoprove` only attacks undischarged obligations and never touches an existing proof. Two flags change that, for refreshing archives whose proofs were made by older Rodin releases:
+
+- `--recalculate` feeds every obligation to Rodin's recalculate-auto-status pass: each one is re-proved and the stored proof is replaced whenever the fresh attempt discharges it, re-anchoring proofs to the current reasoner levels; obligations the auto-prover cannot re-close keep their stored proofs.
+- `--purge-proofs` drops all stored proofs and statuses (`.bpr`, `.bps`) from the workspace copy before building, so proving starts from an empty proof store and the repackaged archive carries only proofs the current auto-tactics found.
+
+```bash
+./rodin-headless autoprove --recalculate model.zip    # refresh, keep unprovable proofs
+./rodin-headless autoprove --purge-proofs model.zip   # re-prove from scratch
+```
+
 ### SELinux / Podman
 
 In Docker mode the `rodin-headless` wrapper auto-detects SELinux and applies the `:Z` volume flag. Docker and podman are both supported.

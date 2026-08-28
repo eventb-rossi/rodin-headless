@@ -33,6 +33,11 @@ Options (anywhere after the command word):
                                  the build (default: on); off still runs the
                                  static checker, the obligation generator,
                                  and the proof-status update
+  --recalculate                  With autoprove: re-run the auto-prover on
+                                 every obligation, replacing each stored
+                                 proof the fresh attempt can discharge
+  --purge-proofs                 Drop all stored proofs and statuses from
+                                 the workspace before building
 
 Environment:
   RODIN_BUILD_TIMEOUT            Rodin build timeout (default: 60m; off disables)
@@ -47,6 +52,7 @@ Examples:
   rodin-headless prove model.zip
   rodin-headless validate model.zip
   rodin-headless autoprove model.zip
+  rodin-headless autoprove --recalculate model.zip
   rodin-headless probcli model.eventb -mc 500
 EOF
 }

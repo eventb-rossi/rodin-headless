@@ -35,6 +35,10 @@ Options (anywhere after the command word):
                                  static check or was never checked
   --auto-tactics on|off          Run or skip Rodin's automatic prover during
                                  the build (default: on)
+  --recalculate                  With autoprove: re-run the auto-prover on
+                                 every obligation, replacing provable proofs
+  --purge-proofs                 Drop all stored proofs and statuses from
+                                 the workspace before building
 
 Environment:
   RODIN_IMAGE                    Container image (default ghcr.io/eventb-rossi/rodin-headless:latest)

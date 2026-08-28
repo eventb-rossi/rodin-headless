@@ -21,6 +21,8 @@
 #   MODE: build (default), check, prove, validate, autoprove
 #   --strict: exit non-zero when any component fails the static check
 #   --auto-tactics off: skip Rodin's automatic prover during the build
+#   --recalculate: with autoprove, re-run the auto-prover on every PO
+#   --purge-proofs: drop stored proofs/statuses before building
 #
 # Examples:
 #   ./rodin-headless.sh /home/work/bin/rodin . evbt_bridge.zip evbt_elevator.zip
@@ -54,11 +56,15 @@ fi
 BUILD_MODE="build"
 STRICT_MODE=false
 AUTO_TACTICS="on"
+RECALCULATE=false
+PURGE_PROOFS=false
 POSITIONAL_ARGS=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --mode)   BUILD_MODE="${2:-build}"; shift 2 ;;
         --strict) STRICT_MODE=true; shift ;;
+        --recalculate)  RECALCULATE=true; shift ;;
+        --purge-proofs) PURGE_PROOFS=true; shift ;;
         --auto-tactics)
             case "${2:-}" in
                 on | off) AUTO_TACTICS="$2" ;;
@@ -77,6 +83,12 @@ while [ $# -gt 0 ]; do
     esac
 done
 set -- ${POSITIONAL_ARGS[@]+"${POSITIONAL_ARGS[@]}"}
+
+# Validated after the loop: --mode may appear after --recalculate.
+if [ "$RECALCULATE" = true ] && [ "$BUILD_MODE" != "autoprove" ]; then
+    echo "ERROR: --recalculate is only valid with the autoprove command" >&2
+    exit 1
+fi
 
 # Auto-start virtual framebuffer if no display is available (e.g., Docker)
 if [ -z "${DISPLAY:-}" ] && command -v Xvfb >/dev/null 2>&1; then
@@ -273,6 +285,13 @@ for zip_index in "${!ZIPS[@]}"; do
 
     # Generate .project if missing
     projdir="$WORKSPACE/$projname"
+    # Purge only the workspace copy; the archive keeps its files until
+    # repackaging overwrites the regenerated ones by name. Rodin never
+    # deletes .bpr on its own ("it contains user proofs"), so a fresh
+    # re-prove has to start from an empty proof store.
+    if [ "$PURGE_PROOFS" = true ]; then
+        rm -f "$projdir"/*.bpr "$projdir"/*.bps
+    fi
     if [ ! -f "$projdir/.project" ]; then
         cat > "$projdir/.project" << EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -474,6 +493,13 @@ public class HeadlessBuilder implements IApplication {
 
     private boolean runAutoProver(IWorkspaceRoot root) throws Exception {
         boolean allProved = true;
+        // Recalculate mode feeds every status to Rodin's "recalculate
+        // auto status" pass, which re-proves each obligation and
+        // replaces the stored proof whenever the fresh attempt closes
+        // — re-anchoring proofs to the current reasoner levels. The
+        // default only attacks undischarged obligations and never
+        // touches an existing proof.
+        boolean recalculate = Boolean.getBoolean("rodinbuilder.recalculate");
 
         for (IProject project : root.getProjects()) {
             if (!project.isOpen()) continue;
@@ -493,19 +519,24 @@ public class HeadlessBuilder implements IApplication {
 
                 try {
                     IPSStatus[] allStatuses = psRoot.getStatuses();
-                    Set<IPSStatus> undischarged = new HashSet<>();
+                    Set<IPSStatus> selected = new HashSet<>();
                     for (IPSStatus s : allStatuses) {
-                        if (s.getConfidence() <= IConfidence.PENDING) {
-                            undischarged.add(s);
+                        if (recalculate || s.getConfidence() <= IConfidence.PENDING) {
+                            selected.add(s);
                         }
                     }
 
                     System.out.println("\n=== Auto-prove: " + name + " ===");
                     System.out.println("  Total POs: " + allStatuses.length
-                        + ", undischarged: " + undischarged.size());
+                        + (recalculate ? ", recalculating all"
+                                       : ", undischarged: " + selected.size()));
 
-                    if (!undischarged.isEmpty()) {
-                        EventBPlugin.runAutoProver(undischarged, new NullProgressMonitor());
+                    if (!selected.isEmpty()) {
+                        if (recalculate) {
+                            EventBPlugin.recalculateAutoStatus(selected, new NullProgressMonitor());
+                        } else {
+                            EventBPlugin.runAutoProver(selected, new NullProgressMonitor());
+                        }
                     }
 
                     // Re-read and report results
@@ -696,7 +727,7 @@ if [ -n "$LAUNCHER_JAR" ]; then
     # -install is load-bearing: the relative plugins/... locations in
     # the seeded bundles.info resolve against the install area.
     RODIN_CMD=(java "-Drodinbuilder.mode=$BUILD_MODE" "-Drodinbuilder.strict=$STRICT_MODE"
-        "-Drodinbuilder.autotactics=$AUTO_TACTICS"
+        "-Drodinbuilder.autotactics=$AUTO_TACTICS" "-Drodinbuilder.recalculate=$RECALCULATE"
         "${JDK_XML_RELAXED_OPTS[@]}"
         ${JAVA_PLATFORM_OPTS[@]+"${JAVA_PLATFORM_OPTS[@]}"}
         -jar "$LAUNCHER_JAR" -install "$RODIN_HOME")
@@ -708,7 +739,7 @@ else
     RODIN_VMARGS=(--launcher.appendVmargs -vmargs
         "${JDK_XML_RELAXED_OPTS[@]}"
         "-Drodinbuilder.mode=$BUILD_MODE" "-Drodinbuilder.strict=$STRICT_MODE"
-        "-Drodinbuilder.autotactics=$AUTO_TACTICS")
+        "-Drodinbuilder.autotactics=$AUTO_TACTICS" "-Drodinbuilder.recalculate=$RECALCULATE")
 fi
 
 echo "Rodin build timeout: $RODIN_BUILD_TIMEOUT"

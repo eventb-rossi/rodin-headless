@@ -29,6 +29,10 @@ Options (anywhere after the command word):
   --strict                       Exit non-zero when any component fails
                                  Rodin's static check or was never checked
                                  (multi-project archives are rejected)
+  --auto-tactics on|off          Run or skip Rodin's automatic prover during
+                                 the build (default: on); off still runs the
+                                 static checker, the obligation generator,
+                                 and the proof-status update
 
 Environment:
   RODIN_BUILD_TIMEOUT            Rodin build timeout (default: 60m; off disables)
@@ -38,6 +42,7 @@ Examples:
   rodin-headless model.zip
   rodin-headless build model.zip
   rodin-headless build --strict model.zip
+  rodin-headless build --auto-tactics off model.zip
   rodin-headless check model.zip
   rodin-headless prove model.zip
   rodin-headless validate model.zip

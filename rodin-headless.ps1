@@ -33,6 +33,8 @@ Commands:
 Options (anywhere after the command word):
   --strict                       Exit non-zero when any component fails Rodin's
                                  static check or was never checked
+  --auto-tactics on|off          Run or skip Rodin's automatic prover during
+                                 the build (default: on)
 
 Environment:
   RODIN_IMAGE                    Container image (default ghcr.io/eventb-rossi/rodin-headless:latest)

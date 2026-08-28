@@ -5,6 +5,8 @@ rodin\-headless \- headless Event\-B build, model\-check, and proof runner
 .B rodin\-headless
 .RI [ command ]
 .RI [ \-\-strict ]
+.RB [ \-\-auto\-tactics
+.IR on | off ]
 .RI [ model.zip ...]
 .br
 .B rodin\-headless
@@ -64,6 +66,17 @@ Print usage and exit. Requires no runtime, install, or image.
 .B \-\-strict
 Exit non\-zero when any component fails Rodin's static check or was never
 checked (including multi\-project archives). May appear anywhere after the
+command word.
+.TP
+.BR \-\-auto\-tactics " on|off"
+Run or skip Rodin's automatic prover during the build (default:
+.BR on ).
+With
+.BR off ,
+the build still runs the static checker, the proof\-obligation generator,
+and the proof\-status update \(em rewriting
+.I .bps
+verdicts \(em but never invokes a prover. May appear anywhere after the
 command word.
 .TP
 .BR \-\-version ", " \-V

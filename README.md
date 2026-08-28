@@ -150,6 +150,12 @@ Every model command prints a per-component static-check summary after the build 
 ./rodin-headless build --strict model.zip   # exit 1 if the model does not statically check
 ```
 
+Every model command also accepts `--auto-tactics on|off` (default `on`). With `off`, the build still runs Rodin's static checker, proof-obligation generator, and proof-status update — rewriting the `.bps` verdicts — but never invokes the automatic prover, so the repackaged archive carries Rodin's pure proof-status pass, uncontaminated by freshly found proofs.
+
+```bash
+./rodin-headless build --auto-tactics off model.zip   # status update only, no prover
+```
+
 ## Runtime Selection
 
 The wrapper resolves the runtime in this order (`RODIN_RUNTIME=auto`, the default):

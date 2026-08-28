@@ -282,6 +282,8 @@ test_rodin_help_skips_runtime() {
         "rodin help should print usage text"
     assert_contains "$output" "--strict" \
         "rodin help should document the strict flag"
+    assert_contains "$output" "--auto-tactics on|off" \
+        "rodin help should document the auto-tactics flag"
     if [ -e "$marker" ]; then
         fail "rodin help should not invoke docker or podman"
     fi
@@ -1414,13 +1416,16 @@ test_rodin_headless_reports_static_check_accuracy() {
         "the builder should read the static checker's accuracy verdict"
     assert_contains "$script" '"-Drodinbuilder.strict=$STRICT_MODE"' \
         "the launch should thread the strict flag into the JVM"
+    assert_contains "$script" '"-Drodinbuilder.autotactics=$AUTO_TACTICS"' \
+        "the launch should thread the auto-tactics flag into the JVM"
     assert_contains "$script" '--launcher.appendVmargs' \
         "the native-binary launch should append vmargs instead of replacing rodin.ini's"
     # The trailing ')' pins the RODIN_VMARGS array specifically: the
     # native-binary branch must keep passing the mode property (it was
     # silently dropped before this assertion existed).
-    assert_contains "$script" '"-Drodinbuilder.mode=$BUILD_MODE" "-Drodinbuilder.strict=$STRICT_MODE")' \
-        "the native-binary vmargs must carry the mode property too"
+    assert_contains "$script" '"-Drodinbuilder.mode=$BUILD_MODE" "-Drodinbuilder.strict=$STRICT_MODE"
+        "-Drodinbuilder.autotactics=$AUTO_TACTICS")' \
+        "the native-binary vmargs must carry the mode and auto-tactics properties too"
 }
 
 test_rodin_headless_parses_strict_flag() {
@@ -1440,6 +1445,36 @@ test_rodin_headless_parses_strict_flag() {
         run_engine missing.zip --strict
     assert_fails_with "unknown option '--bogus'" \
         run_engine --bogus model.zip
+}
+
+test_rodin_headless_parses_auto_tactics_flag() {
+    local rodin_dir models_dir script
+    setup_engine_fixture
+
+    # The flag and its value are consumed wherever they appear, reaching
+    # the archive-selection error rather than tripping path resolution.
+    assert_fails_with "ERROR: No .zip archives found in $models_dir" \
+        run_engine --auto-tactics off --mode build
+    assert_fails_with "ERROR: None of the requested archives were found in $models_dir" \
+        run_engine missing.zip --auto-tactics on
+
+    # Anything but on/off is a usage error, not a silent default —
+    # including a missing value.
+    assert_fails_with "ERROR: --auto-tactics takes 'on' or 'off'" \
+        run_engine --auto-tactics sometimes model.zip
+    assert_fails_with "ERROR: --auto-tactics takes 'on' or 'off'" \
+        run_engine model.zip --auto-tactics
+
+    # The builder disables both tactic preferences before the workspace
+    # build; the enable flags are only read from these singletons, so
+    # this is the whole off switch.
+    script="$(cat "$ROOT_DIR/rodin-headless.sh")"
+    assert_contains "$script" 'getAutoTacticPreference().setEnabled(false)' \
+        "auto-tactics off should disable the build-time automatic prover"
+    assert_contains "$script" 'getPostTacticPreference().setEnabled(false)' \
+        "auto-tactics off should disable the post-tactic as well"
+    assert_contains "$script" 'rodinbuilder.autotactics' \
+        "the builder should read the auto-tactics property"
 }
 
 test_rodin_headless_strict_rejects_multi_project_archives() {
@@ -2016,6 +2051,7 @@ main() {
     test_prob_core_dependency_glob_uses_resolved_directory
     test_rodin_headless_reports_static_check_accuracy
     test_rodin_headless_parses_strict_flag
+    test_rodin_headless_parses_auto_tactics_flag
     test_rodin_headless_strict_rejects_multi_project_archives
     test_validate_deadlock_check_uses_eventb_true_ast
     test_installer_check_deps_works_without_home

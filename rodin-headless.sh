@@ -14,12 +14,13 @@
 # - Rodin IDE installed (Eclipse-based)
 # - Java 21+ (for compiling the OSGi plugin)
 #
-# Usage: ./rodin-headless.sh [--mode MODE] [--strict] [<rodin-dir> <models-dir>] [model1.zip ...]
+# Usage: ./rodin-headless.sh [--mode MODE] [--strict] [--auto-tactics on|off] [<rodin-dir> <models-dir>] [model1.zip ...]
 #   If no specific models are listed, all .zip files in models-dir are processed.
 #   Paths can also be set via RODIN_DIR and MODELS_DIR environment variables.
 #   RODIN_BUILD_TIMEOUT defaults to 60m; set to off to disable.
 #   MODE: build (default), check, prove, validate, autoprove
 #   --strict: exit non-zero when any component fails the static check
+#   --auto-tactics off: skip Rodin's automatic prover during the build
 #
 # Examples:
 #   ./rodin-headless.sh /home/work/bin/rodin . evbt_bridge.zip evbt_elevator.zip
@@ -47,16 +48,27 @@ fi
 # shellcheck source=rodin-headless-lib.sh
 . "$RODIN_HEADLESS_LIBEXEC/rodin-headless-lib.sh"
 
-# Parse --mode/--strict flags; they may appear anywhere among the
-# positional arguments, and an unknown option fails fast instead of
-# falling through to basename as a bogus archive name.
+# Parse --mode/--strict/--auto-tactics flags; they may appear anywhere
+# among the positional arguments, and an unknown option fails fast
+# instead of falling through to basename as a bogus archive name.
 BUILD_MODE="build"
 STRICT_MODE=false
+AUTO_TACTICS="on"
 POSITIONAL_ARGS=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --mode)   BUILD_MODE="${2:-build}"; shift 2 ;;
         --strict) STRICT_MODE=true; shift ;;
+        --auto-tactics)
+            case "${2:-}" in
+                on | off) AUTO_TACTICS="$2" ;;
+                *)
+                    echo "ERROR: --auto-tactics takes 'on' or 'off' (got '${2:-}')" >&2
+                    exit 1
+                    ;;
+            esac
+            shift 2
+            ;;
         --*)
             echo "ERROR: unknown option '$1'" >&2
             exit 1
@@ -100,7 +112,7 @@ else
 fi
 
 if [ -z "$RODIN_DIR" ] || [ -z "$MODELS_DIR" ]; then
-    echo "Usage: $0 [--mode MODE] [--strict] [<rodin-dir> <models-dir>] [model1.zip ...]" >&2
+    echo "Usage: $0 [--mode MODE] [--strict] [--auto-tactics on|off] [<rodin-dir> <models-dir>] [model1.zip ...]" >&2
     echo "  Or set RODIN_DIR and MODELS_DIR environment variables." >&2
     exit 1
 fi
@@ -357,6 +369,20 @@ public class HeadlessBuilder implements IApplication {
                     }
                 }
             }
+        }
+
+        // The builder runs Rodin's automatic prover on every out-of-date
+        // proof obligation by default. With auto-tactics off the build
+        // still runs the static checker, the obligation generator, and
+        // the proof-status update (rewriting .bps verdicts), but never
+        // invokes a prover — the pure status pass that status oracles
+        // need. The enable flags are only read from the in-memory
+        // preference singletons, so setting them here (after import,
+        // before the build) is exactly Rodin's own test-harness recipe.
+        if ("off".equals(System.getProperty("rodinbuilder.autotactics", "on"))) {
+            System.out.println("Auto-tactics disabled: the build will not run the automatic prover.");
+            EventBPlugin.getAutoPostTacticManager().getAutoTacticPreference().setEnabled(false);
+            EventBPlugin.getAutoPostTacticManager().getPostTacticPreference().setEnabled(false);
         }
 
         System.out.println("Building workspace...");
@@ -670,6 +696,7 @@ if [ -n "$LAUNCHER_JAR" ]; then
     # -install is load-bearing: the relative plugins/... locations in
     # the seeded bundles.info resolve against the install area.
     RODIN_CMD=(java "-Drodinbuilder.mode=$BUILD_MODE" "-Drodinbuilder.strict=$STRICT_MODE"
+        "-Drodinbuilder.autotactics=$AUTO_TACTICS"
         "${JDK_XML_RELAXED_OPTS[@]}"
         ${JAVA_PLATFORM_OPTS[@]+"${JAVA_PLATFORM_OPTS[@]}"}
         -jar "$LAUNCHER_JAR" -install "$RODIN_HOME")
@@ -680,7 +707,8 @@ else
     # intact instead of replacing them.
     RODIN_VMARGS=(--launcher.appendVmargs -vmargs
         "${JDK_XML_RELAXED_OPTS[@]}"
-        "-Drodinbuilder.mode=$BUILD_MODE" "-Drodinbuilder.strict=$STRICT_MODE")
+        "-Drodinbuilder.mode=$BUILD_MODE" "-Drodinbuilder.strict=$STRICT_MODE"
+        "-Drodinbuilder.autotactics=$AUTO_TACTICS")
 fi
 
 echo "Rodin build timeout: $RODIN_BUILD_TIMEOUT"

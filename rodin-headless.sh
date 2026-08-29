@@ -224,9 +224,12 @@ import org.eventb.internal.core.seqprover.eventbExtensions.rewriters.AutoRewrite
  *
  *   OK TAB rewritten-predicate TAB rule,rule,...
  *
- * with the fired SIMP_*\/DEF_* names harvested from the rewriter's
- * DEBUG trace (auto-flattening steps leave no trace, so the rule list
- * is best-effort while the predicate is exact), or
+ * with the predicate in its typed spelling (toStringWithTypes, so a
+ * result whose bound identifiers or empty sets lost their typing
+ * context still parses unambiguously) and the fired SIMP_*\/DEF_*
+ * names harvested from the rewriter's DEBUG trace (auto-flattening
+ * steps leave no trace, so the rule list is best-effort while the
+ * predicate is exact), or
  *
  *   ERR TAB message
  */
@@ -293,7 +296,7 @@ public class RewriteOracle {
                         rules.append(r);
                     }
                 }
-                realOut.println("OK\t" + current + "\t" + rules);
+                realOut.println("OK\t" + current.toStringWithTypes() + "\t" + rules);
             } catch (Throwable e) {
                 System.setOut(realOut);
                 String msg = String.valueOf(e);

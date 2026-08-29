@@ -1527,6 +1527,8 @@ test_rodin_headless_rewrite_oracle_mode() {
         "the oracle should enable the rewriter trace before construction"
     assert_contains "$script" 'AutoRewrites.Level.L5' \
         "the oracle should rewrite at the latest level"
+    assert_contains "$script" 'toStringWithTypes' \
+        "the oracle should answer in the typed spelling"
 
     # The dispatch table forwards the command word as a mode.
     assert_contains "$(cat "$ROOT_DIR/entrypoint.sh")" \

@@ -14,13 +14,17 @@
 # - Rodin IDE installed (Eclipse-based)
 # - Java 21+ (for compiling the OSGi plugin)
 #
-# Usage: ./rodin-headless.sh [--mode MODE] [--strict] [--auto-tactics on|off] [<rodin-dir> <models-dir>] [model1.zip ...]
+# Usage: ./rodin-headless.sh [--mode MODE] [--strict] [--auto-tactics on|off]
+#            [--tactic-profile NAME] [<rodin-dir> <models-dir>] [model1.zip ...]
 #   If no specific models are listed, all .zip files in models-dir are processed.
 #   Paths can also be set via RODIN_DIR and MODELS_DIR environment variables.
 #   RODIN_BUILD_TIMEOUT defaults to 60m; set to off to disable.
 #   MODE: build (default), check, prove, validate, autoprove
 #   --strict: exit non-zero when any component fails the static check
 #   --auto-tactics off: skip Rodin's automatic prover during the build
+#   --tactic-profile NAME: use a named auto-tactic profile instead of
+#     Eclipse's default, e.g. "Default Auto Tactic with SMT". Unknown
+#     names are rejected, listing what is available.
 #   --recalculate: with autoprove, re-run the auto-prover on every PO
 #   --purge-proofs: drop stored proofs/statuses before building
 #
@@ -50,12 +54,13 @@ fi
 # shellcheck source=rodin-headless-lib.sh
 . "$RODIN_HEADLESS_LIBEXEC/rodin-headless-lib.sh"
 
-# Parse --mode/--strict/--auto-tactics flags; they may appear anywhere
+# Parse --mode/--strict/--auto-tactics/--tactic-profile flags; they may appear anywhere
 # among the positional arguments, and an unknown option fails fast
 # instead of falling through to basename as a bogus archive name.
 BUILD_MODE="build"
 STRICT_MODE=false
 AUTO_TACTICS="on"
+TACTIC_PROFILE=""
 RECALCULATE=false
 PURGE_PROOFS=false
 POSITIONAL_ARGS=()
@@ -73,6 +78,14 @@ while [ $# -gt 0 ]; do
                     exit 1
                     ;;
             esac
+            shift 2
+            ;;
+        --tactic-profile)
+            if [ -z "${2:-}" ]; then
+                echo "ERROR: --tactic-profile takes a profile name" >&2
+                exit 1
+            fi
+            TACTIC_PROFILE="$2"
             shift 2
             ;;
         --*)
@@ -124,7 +137,7 @@ else
 fi
 
 if [ -z "$RODIN_DIR" ] || [ -z "$MODELS_DIR" ]; then
-    echo "Usage: $0 [--mode MODE] [--strict] [--auto-tactics on|off] [<rodin-dir> <models-dir>] [model1.zip ...]" >&2
+    echo "Usage: $0 [--mode MODE] [--strict] [--auto-tactics on|off] [--tactic-profile NAME] [<rodin-dir> <models-dir>] [model1.zip ...]" >&2
     echo "  Or set RODIN_DIR and MODELS_DIR environment variables." >&2
     exit 1
 fi
@@ -487,10 +500,17 @@ package rodinbuilder;
 
 import org.eclipse.core.resources.*;
 import org.eclipse.core.runtime.*;
+import org.eclipse.core.runtime.preferences.IEclipsePreferences;
+import org.eclipse.core.runtime.preferences.InstanceScope;
 import org.eclipse.equinox.app.IApplication;
 import org.eclipse.equinox.app.IApplicationContext;
 import org.rodinp.core.*;
 import org.eventb.core.*;
+import org.eventb.core.preferences.IPrefMapEntry;
+import org.eventb.core.preferences.autotactics.ITacticProfileCache;
+import org.eventb.core.preferences.autotactics.TacticPreferenceConstants;
+import org.eventb.core.preferences.autotactics.TacticPreferenceFactory;
+import org.eventb.core.seqprover.ITacticDescriptor;
 import de.prob.core.Animator;
 import de.prob.core.command.*;
 import de.prob.prolog.output.StructuredPrologOutput;
@@ -543,6 +563,44 @@ public class HeadlessBuilder implements IApplication {
             System.out.println("Auto-tactics disabled: the build will not run the automatic prover.");
             EventBPlugin.getAutoPostTacticManager().getAutoTacticPreference().setEnabled(false);
             EventBPlugin.getAutoPostTacticManager().getPostTacticPreference().setEnabled(false);
+        }
+
+        // Each run gets a throwaway workspace, so without this the build
+        // always uses Eclipse's default choice -- "Default Auto Tactic
+        // Profile", which carries no SMT. The profile is selected through
+        // the preference rather than by handing the manager a descriptor,
+        // because that is what getSelectedComposedTactics() actually reads.
+        // Contributed profiles (the SMT ones live in the SMT plug-in) are
+        // added to the cache by its inject(), so load() sees them too.
+        String profileName = System.getProperty("rodinbuilder.profile", "");
+        if (!profileName.isEmpty()) {
+            IEclipsePreferences prefNode =
+                InstanceScope.INSTANCE.getNode("org.eventb.core");
+            ITacticProfileCache profiles =
+                TacticPreferenceFactory.makeTacticProfileCache(prefNode);
+            profiles.load();
+            if (!profiles.exists(profileName)) {
+                // Refuse rather than fall back: an unknown name otherwise
+                // resolves to a fail-tactic and every obligation quietly
+                // goes undischarged, which reads as a solver regression.
+                StringBuilder known = new StringBuilder();
+                for (IPrefMapEntry<ITacticDescriptor> e : profiles.getEntries()) {
+                    known.append("\n  ").append(e.getKey());
+                }
+                System.err.println("ERROR: unknown tactic profile '" + profileName
+                    + "'. Available profiles:" + known);
+                return Integer.valueOf(1);
+            }
+            // Write the profile map back before selecting from it. The
+            // manager resolves the choice against its own plain cache,
+            // which -- unlike this one -- does not add the extension-point
+            // contributions, so an SMT profile that exists here is invisible
+            // there until it is materialised into the stored preference.
+            // The UI does this implicitly when its preference page is saved.
+            profiles.store();
+            prefNode.put(TacticPreferenceConstants.P_AUTOTACTIC_CHOICE, profileName);
+            prefNode.flush();
+            System.out.println("Auto-tactic profile: " + profileName);
         }
 
         System.out.println("Building workspace...");
@@ -813,6 +871,7 @@ Bundle-Version: $BUNDLE_VERSION
 Require-Bundle: org.eclipse.core.resources,
  org.eclipse.core.runtime,
  org.eclipse.equinox.app,
+ org.eclipse.equinox.preferences,
  de.prob.core,
  org.eventb.core,
  org.eventb.core.ast,
@@ -826,6 +885,10 @@ CP=$(resolve_latest_jar "$RODIN_PLUGINS" org.eclipse.core.resources)
 CP="$CP:$(resolve_latest_jar "$RODIN_PLUGINS" org.eclipse.core.runtime)"
 CP="$CP:$(resolve_latest_jar "$RODIN_PLUGINS" org.eclipse.equinox.app)"
 CP="$CP:$(resolve_latest_jar "$RODIN_PLUGINS" org.eclipse.equinox.common)"
+CP="$CP:$(resolve_latest_jar "$RODIN_PLUGINS" org.eclipse.equinox.preferences)"
+# IEclipsePreferences extends org.osgi.service.prefs.Preferences, which
+# ships in its own bundle rather than in equinox.preferences.
+CP="$CP:$(resolve_latest_jar "$RODIN_PLUGINS" org.osgi.service.prefs)"
 CP="$CP:$(resolve_latest_jar "$RODIN_PLUGINS" org.eclipse.core.jobs)"
 CP="$CP:$(resolve_latest_jar "$RODIN_PLUGINS" org.eclipse.osgi)"
 CP="$CP:$(resolve_latest_jar "$RODIN_PLUGINS" org.eventb.core)"
@@ -869,6 +932,7 @@ if [ -n "$LAUNCHER_JAR" ]; then
     # the seeded bundles.info resolve against the install area.
     RODIN_CMD=(java "-Drodinbuilder.mode=$BUILD_MODE" "-Drodinbuilder.strict=$STRICT_MODE"
         "-Drodinbuilder.autotactics=$AUTO_TACTICS" "-Drodinbuilder.recalculate=$RECALCULATE"
+        "-Drodinbuilder.profile=$TACTIC_PROFILE"
         "${JDK_XML_RELAXED_OPTS[@]}"
         ${JAVA_PLATFORM_OPTS[@]+"${JAVA_PLATFORM_OPTS[@]}"}
         -jar "$LAUNCHER_JAR" -install "$RODIN_HOME")
@@ -880,7 +944,8 @@ else
     RODIN_VMARGS=(--launcher.appendVmargs -vmargs
         "${JDK_XML_RELAXED_OPTS[@]}"
         "-Drodinbuilder.mode=$BUILD_MODE" "-Drodinbuilder.strict=$STRICT_MODE"
-        "-Drodinbuilder.autotactics=$AUTO_TACTICS" "-Drodinbuilder.recalculate=$RECALCULATE")
+        "-Drodinbuilder.autotactics=$AUTO_TACTICS" "-Drodinbuilder.recalculate=$RECALCULATE"
+        "-Drodinbuilder.profile=$TACTIC_PROFILE")
 fi
 
 echo "Rodin build timeout: $RODIN_BUILD_TIMEOUT"

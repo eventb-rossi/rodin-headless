@@ -36,6 +36,10 @@ Options (anywhere after the command word):
                                  the build (default: on); off still runs the
                                  static checker, the obligation generator,
                                  and the proof-status update
+  --tactic-profile NAME          Use a named auto-tactic profile instead of
+                                 Eclipse's default, e.g.
+                                 "Default Auto Tactic with SMT". Unknown
+                                 names are rejected, listing what exists
   --recalculate                  With autoprove: re-run the auto-prover on
                                  every obligation, replacing each stored
                                  proof the fresh attempt can discharge
@@ -56,6 +60,8 @@ Examples:
   rodin-headless validate model.zip
   rodin-headless autoprove model.zip
   rodin-headless autoprove --recalculate model.zip
+  rodin-headless autoprove --purge-proofs \
+    --tactic-profile "Default Auto Tactic with SMT" model.zip
   rodin-headless probcli model.eventb -mc 500
 EOF
 }

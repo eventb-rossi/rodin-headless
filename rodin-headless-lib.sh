@@ -102,9 +102,17 @@ find_archive_project_root() {
     find_archive_project_roots "$1" | head -1
 }
 
+# Create a temp file (or, with -d, a directory) under ${TMPDIR:-/tmp}.
+# Always pass an explicit template: a template-less mktemp ignores TMPDIR
+# on macOS (it uses the per-user Darwin temp dir), and a hardcoded /tmp
+# breaks hosts where only TMPDIR is writable (sandboxes, some CI runners).
+rh_mktemp() {
+    mktemp ${1:+"$1"} "${TMPDIR:-/tmp}/rodin-headless.XXXXXX"
+}
+
 run_with_filtered_output() {
     local output_file status had_errexit
-    output_file="$(mktemp)"
+    output_file="$(rh_mktemp)"
     had_errexit=0
 
     case $- in
@@ -172,7 +180,7 @@ run_with_watchdog_timeout() {
     # A non-empty flag file marks "the watchdog fired", which beats
     # inspecting wait's status: the command may trap TERM or exit 143
     # on its own.
-    flag_file="$(mktemp)"
+    flag_file="$(rh_mktemp)"
 
     set -m
     "$@" &

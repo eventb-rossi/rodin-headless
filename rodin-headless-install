@@ -183,7 +183,7 @@ download_archive() {
 fetch_and_unpack() {
     local url="$1" dest="$2" archive
 
-    archive="$(mktemp /tmp/rodin-headless-dl.XXXXXX)"
+    archive="$(rh_mktemp)"
     TMP_PATHS+=("$archive")
     download_archive "$url" "$archive"
     mkdir -p "$dest"
@@ -207,7 +207,7 @@ record_installed_version() {
     local key="$1" value="$2" manifest tmp
 
     manifest="$PREFIX/.rodin-headless-versions"
-    tmp="$(mktemp)"
+    tmp="$(rh_mktemp)"
     if [ -f "$manifest" ]; then
         grep -v "^$key=" "$manifest" > "$tmp" || true
     fi
@@ -393,7 +393,7 @@ install_rodin() {
     # rodin.ini's mode with mktemp's 0600.
     java_bin_dir="$(dirname "$(command -v java)")"
     if [ "$(head -1 "$staging_home/rodin.ini")" != "-vm" ]; then
-        ini_tmp="$(mktemp)"
+        ini_tmp="$(rh_mktemp)"
         printf -- '-vm\n%s\n' "$java_bin_dir" | cat - "$staging_home/rodin.ini" > "$ini_tmp"
         cat "$ini_tmp" > "$staging_home/rodin.ini"
         rm -f "$ini_tmp"

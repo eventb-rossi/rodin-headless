@@ -180,6 +180,22 @@ download_archive() {
     return "$status"
 }
 
+# If DIR holds exactly one entry and it is a directory, move that
+# directory's contents up into DIR. The wrapper is renamed first: on a
+# case-insensitive filesystem ProB/ would otherwise collide with the
+# `prob` launcher it contains.
+hoist_single_wrapper() {
+    local dir="$1" entries wrapper
+    entries="$(find "$dir" -mindepth 1 -maxdepth 1)"
+    [ -n "$entries" ] || return 0
+    [ "$(printf '%s\n' "$entries" | wc -l)" -eq 1 ] || return 0
+    [ -d "$entries" ] || return 0
+    wrapper="$dir/.rodin-headless-wrapper.$$"
+    mv "$entries" "$wrapper"
+    find "$wrapper" -mindepth 1 -maxdepth 1 -exec mv {} "$dir/" \;
+    rmdir "$wrapper"
+}
+
 fetch_and_unpack() {
     local url="$1" dest="$2" archive
 
@@ -189,9 +205,14 @@ fetch_and_unpack() {
     mkdir -p "$dest"
     case "$url" in
         *.zip)
-            # The ProB macOS archive is flat (probcli at the root), so
-            # there is no wrapping directory to strip.
+            # The ProB macOS zip has shipped in three layouts: flat
+            # (probcli at the root; up to 1.13.x and 1.15.1), wrapped in
+            # ProB.macos/ next to Finder's __MACOSX/ (1.15.0), and wrapped
+            # in ProB/ like the Linux tarball (1.16.0 onwards). unzip has
+            # no --strip-components, so normalise after unpacking.
             unzip -q "$archive" -d "$dest"
+            rm -rf "$dest/__MACOSX"
+            hoist_single_wrapper "$dest"
             ;;
         *)
             tar xzf "$archive" -C "$dest" --strip-components=1
@@ -453,6 +474,11 @@ install_prob() {
         staging="$(mktemp -d "$PREFIX/.prob-staging.XXXXXX")"
         TMP_PATHS+=("$staging")
         fetch_and_unpack "$PROB_URL" "$staging"
+        if [ ! -x "$staging/probcli" ]; then
+            echo "ERROR: no probcli at the root of the unpacked ProB archive ($PROB_URL)" >&2
+            echo "       The archive layout may have changed; nothing was installed." >&2
+            exit 1
+        fi
         rm -rf "$PROB_INSTALL_DIR"
         mv "$staging" "$PROB_INSTALL_DIR"
         record_installed_version prob "$PROB_VERSION"

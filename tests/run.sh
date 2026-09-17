@@ -23,7 +23,7 @@ trap cleanup EXIT
 
 new_tmpdir() {
     local dir
-    dir="$(mktemp -d)"
+    dir="$(mktemp -d "${TMPDIR:-/tmp}/rodin-headless-test.XXXXXX")"
     TEST_TMPDIRS+=("$dir")
     printf '%s\n' "$dir"
 }
@@ -2054,6 +2054,27 @@ test_installer_reports_version() {
         "rodin-headless-install --version should report the project version"
 }
 
+test_rh_mktemp_honours_tmpdir() {
+    local tmpdir file dir
+    tmpdir="$(new_tmpdir)"
+    file="$(TMPDIR="$tmpdir" bash -c ". '$ROOT_DIR/rodin-headless-lib.sh'; rh_mktemp")"
+    dir="$(TMPDIR="$tmpdir" bash -c ". '$ROOT_DIR/rodin-headless-lib.sh'; rh_mktemp -d")"
+    assert_contains "$file" "$tmpdir/rodin-headless." "rh_mktemp should create files under TMPDIR"
+    assert_contains "$dir" "$tmpdir/rodin-headless." "rh_mktemp -d should create directories under TMPDIR"
+    [ -f "$file" ] || fail "rh_mktemp should create a file"
+    [ -d "$dir" ] || fail "rh_mktemp -d should create a directory"
+}
+
+test_scripts_have_no_bare_mktemp() {
+    local script offenders
+    for script in rodin-headless rodin-headless.sh rodin-headless-install rodin-headless-lib.sh; do
+        offenders="$(grep -nE '(^|[^_[:alnum:]])mktemp' "$ROOT_DIR/$script" \
+            | grep -vE '^[0-9]+:[[:space:]]*#' \
+            | grep -vE 'mktemp (-d )?"\$PREFIX/|mktemp \$\{1' || true)"
+        assert_eq "" "$offenders" "$script should create temp paths via rh_mktemp or under PREFIX"
+    done
+}
+
 main() {
     local tool
     for tool in zip unzip; do
@@ -2130,6 +2151,8 @@ main() {
     test_installer_darwin_prob_phase_unpacks_flat_zip
     test_installer_records_resolved_versions
     test_dockerfile_installs_headless_helper
+    test_rh_mktemp_honours_tmpdir
+    test_scripts_have_no_bare_mktemp
     printf 'PASS: %s\n' "tests/run.sh"
 }
 

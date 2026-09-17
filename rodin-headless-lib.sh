@@ -102,12 +102,16 @@ find_archive_project_root() {
     find_archive_project_roots "$1" | head -1
 }
 
-# Create a temp file (or, with -d, a directory) under ${TMPDIR:-/tmp}.
+# Create a temp file / directory under ${TMPDIR:-/tmp}.
 # Always pass an explicit template: a template-less mktemp ignores TMPDIR
 # on macOS (it uses the per-user Darwin temp dir), and a hardcoded /tmp
 # breaks hosts where only TMPDIR is writable (sandboxes, some CI runners).
 rh_mktemp() {
-    mktemp ${1:+"$1"} "${TMPDIR:-/tmp}/rodin-headless.XXXXXX"
+    mktemp "${TMPDIR:-/tmp}/rodin-headless.XXXXXX"
+}
+
+rh_mktemp_dir() {
+    mktemp -d "${TMPDIR:-/tmp}/rodin-headless.XXXXXX"
 }
 
 run_with_filtered_output() {

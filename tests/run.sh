@@ -2058,11 +2058,11 @@ test_rh_mktemp_honours_tmpdir() {
     local tmpdir file dir
     tmpdir="$(new_tmpdir)"
     file="$(TMPDIR="$tmpdir" bash -c ". '$ROOT_DIR/rodin-headless-lib.sh'; rh_mktemp")"
-    dir="$(TMPDIR="$tmpdir" bash -c ". '$ROOT_DIR/rodin-headless-lib.sh'; rh_mktemp -d")"
+    dir="$(TMPDIR="$tmpdir" bash -c ". '$ROOT_DIR/rodin-headless-lib.sh'; rh_mktemp_dir")"
     assert_contains "$file" "$tmpdir/rodin-headless." "rh_mktemp should create files under TMPDIR"
-    assert_contains "$dir" "$tmpdir/rodin-headless." "rh_mktemp -d should create directories under TMPDIR"
+    assert_contains "$dir" "$tmpdir/rodin-headless." "rh_mktemp_dir should create directories under TMPDIR"
     [ -f "$file" ] || fail "rh_mktemp should create a file"
-    [ -d "$dir" ] || fail "rh_mktemp -d should create a directory"
+    [ -d "$dir" ] || fail "rh_mktemp_dir should create a directory"
 }
 
 test_scripts_have_no_bare_mktemp() {
@@ -2070,7 +2070,7 @@ test_scripts_have_no_bare_mktemp() {
     for script in rodin-headless rodin-headless.sh rodin-headless-install rodin-headless-lib.sh; do
         offenders="$(grep -nE '(^|[^_[:alnum:]])mktemp' "$ROOT_DIR/$script" \
             | grep -vE '^[0-9]+:[[:space:]]*#' \
-            | grep -vE 'mktemp (-d )?"\$PREFIX/|mktemp \$\{1' || true)"
+            | grep -vE 'mktemp (-d )?"\$(PREFIX/|\{TMPDIR:-/tmp\}/)' || true)"
         assert_eq "" "$offenders" "$script should create temp paths via rh_mktemp or under PREFIX"
     done
 }

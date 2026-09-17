@@ -1424,8 +1424,9 @@ test_rodin_headless_reports_static_check_accuracy() {
     # native-binary branch must keep passing the mode property (it was
     # silently dropped before this assertion existed).
     assert_contains "$script" '"-Drodinbuilder.mode=$BUILD_MODE" "-Drodinbuilder.strict=$STRICT_MODE"
-        "-Drodinbuilder.autotactics=$AUTO_TACTICS" "-Drodinbuilder.recalculate=$RECALCULATE")' \
-        "the native-binary vmargs must carry the mode, tactics, and recalculate properties too"
+        "-Drodinbuilder.autotactics=$AUTO_TACTICS" "-Drodinbuilder.recalculate=$RECALCULATE"
+        "-Drodinbuilder.profile=$TACTIC_PROFILE")' \
+        "the native-binary vmargs must carry the mode, tactics, recalculate, and profile properties too"
 }
 
 test_rodin_headless_parses_strict_flag() {

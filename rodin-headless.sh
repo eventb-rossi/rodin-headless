@@ -207,7 +207,7 @@ run_rewrite_oracle() {
         exit 1
     fi
 
-    PLUGIN_DIR=$(rh_mktemp -d)
+    PLUGIN_DIR=$(rh_mktemp_dir)
     cat > "$PLUGIN_DIR/RewriteOracle.java" << 'JAVA'
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
@@ -353,9 +353,9 @@ if ! darwin_gui_session_ok; then
     exit 1
 fi
 
-WORKSPACE=$(rh_mktemp -d)
-PLUGIN_DIR=$(rh_mktemp -d)
-CONFIG_AREA=$(rh_mktemp -d)
+WORKSPACE=$(rh_mktemp_dir)
+PLUGIN_DIR=$(rh_mktemp_dir)
+CONFIG_AREA=$(rh_mktemp_dir)
 case "$PLUGIN_DIR" in
     *,*)
         # bundles.info is comma-separated; a comma in the temp path
@@ -390,7 +390,7 @@ for zip_index in "${!ZIPS[@]}"; do
     zip="${ZIPS[$zip_index]}"
     m="${zip%.zip}"
 
-    tmpdir=$(rh_mktemp -d)
+    tmpdir=$(rh_mktemp_dir)
     unzip -q "$MODELS_DIR/$zip" -d "$tmpdir"
 
     # One walk serves both the root count and the source directory.
@@ -988,7 +988,7 @@ for zip_index in "${!ZIPS[@]}"; do
     m="${zip%.zip}"
 
     # Extract original zip
-    tmpdir=$(rh_mktemp -d)
+    tmpdir=$(rh_mktemp_dir)
     unzip -q "$MODELS_DIR/$zip" -d "$tmpdir"
 
     # The project root was located during extraction; the re-extracted

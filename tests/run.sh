@@ -1638,6 +1638,27 @@ make_prob_mac_fixture_zip() {
     (cd "$staging" && zip -q -r "$destination" .)
 }
 
+# Same payload as make_prob_mac_fixture_zip, wrapped in WRAPPER/ the way
+# the real archive ships since ProB 1.16.0 (ProB/) and shipped in 1.15.0
+# (ProB.macos/ plus Finder's __MACOSX/). `prob` sits beside probcli to
+# catch a ProB/ vs prob collision on case-insensitive filesystems.
+make_prob_mac_wrapped_fixture_zip() {
+    local destination="$1" wrapper="$2" with_macosx="${3:-0}"
+    local staging
+
+    staging="$(new_tmpdir)"
+    mkdir -p "$staging/$wrapper/lib"
+    printf '#!/bin/sh\nexit 0\n' > "$staging/$wrapper/probcli"
+    printf '#!/bin/sh\nexit 0\n' > "$staging/$wrapper/prob"
+    chmod +x "$staging/$wrapper/probcli" "$staging/$wrapper/prob"
+    : > "$staging/$wrapper/lib/probcliparser.jar"
+    if [ "$with_macosx" -eq 1 ]; then
+        mkdir -p "$staging/__MACOSX/$wrapper"
+        : > "$staging/__MACOSX/$wrapper/._probcli"
+    fi
+    (cd "$staging" && zip -q -r "$destination" .)
+}
+
 make_installer_stubs() {
     local tmpbin="$1"
 
@@ -1977,6 +1998,70 @@ test_installer_darwin_prob_phase_unpacks_flat_zip() {
         "darwin prob phase should aim the p2 director at the bundle's Eclipse root"
 }
 
+test_installer_darwin_prob_phase_unpacks_wrapped_zip() {
+    local wrapper with_macosx zip output
+    for wrapper in ProB ProB.macos; do
+        setup_installer_fixture
+        install_darwin_rodin_fixture > /dev/null
+        with_macosx=0
+        [ "$wrapper" = ProB.macos ] && with_macosx=1
+        zip="$(new_tmpdir)/prob-mac-wrapped.zip"
+        make_prob_mac_wrapped_fixture_zip "$zip" "$wrapper" "$with_macosx"
+
+        INSTALLER_TEST_OS=Darwin INSTALLER_TEST_ARCH=arm64 \
+        INSTALLER_TEST_PROB_TARBALL="$zip" \
+            run_installer --prefix "$INSTALLER_PREFIX" --only prob --prob-version 1.16.1 \
+                > /dev/null
+
+        if [ ! -x "$INSTALLER_PREFIX/prob/probcli" ]; then
+            fail "darwin prob phase should hoist probcli out of the $wrapper/ wrapper"
+        fi
+        if [ ! -f "$INSTALLER_PREFIX/prob/lib/probcliparser.jar" ]; then
+            fail "darwin prob phase should hoist the whole $wrapper/ payload, not only probcli"
+        fi
+        if [ -e "$INSTALLER_PREFIX/prob/$wrapper" ] && [ ! -f "$INSTALLER_PREFIX/prob/$wrapper" ]; then
+            fail "darwin prob phase should leave no $wrapper/ directory behind"
+        fi
+        if [ -e "$INSTALLER_PREFIX/prob/__MACOSX" ]; then
+            fail "darwin prob phase should drop Finder's __MACOSX directory"
+        fi
+
+        # The layout bug made a second run refuse the directory it had
+        # just created; it must recognise its own install instead.
+        output="$(INSTALLER_TEST_OS=Darwin INSTALLER_TEST_ARCH=arm64 \
+            INSTALLER_TEST_PROB_TARBALL="$zip" \
+            run_installer --prefix "$INSTALLER_PREFIX" --only prob --prob-version 1.16.1 2>&1)"
+        assert_contains "$output" "ProB CLI already installed" \
+            "a second prob phase should recognise the install made from the $wrapper/ zip"
+    done
+}
+
+test_installer_prob_phase_rejects_archive_without_probcli() {
+    setup_installer_fixture
+    install_darwin_rodin_fixture > /dev/null
+
+    local staging zip output status
+    staging="$(new_tmpdir)"
+    mkdir -p "$staging/lib"
+    : > "$staging/lib/probcliparser.jar"
+    : > "$staging/README"
+    zip="$(new_tmpdir)/prob-mac-no-cli.zip"
+    (cd "$staging" && zip -q -r "$zip" .)
+
+    status=0
+    output="$(INSTALLER_TEST_OS=Darwin INSTALLER_TEST_ARCH=arm64 \
+        INSTALLER_TEST_PROB_TARBALL="$zip" \
+        run_installer --prefix "$INSTALLER_PREFIX" --only prob --prob-version 1.16.1 2>&1)" || status=$?
+    if [ "$status" -eq 0 ]; then
+        fail "prob phase should fail when the archive has no probcli"
+    fi
+    assert_contains "$output" "no probcli at the root of the unpacked ProB archive" \
+        "prob phase should say why it refused the archive"
+    if [ -e "$INSTALLER_PREFIX/prob" ]; then
+        fail "prob phase should not leave a prob directory behind after refusing the archive"
+    fi
+}
+
 test_installer_records_resolved_versions() {
     setup_installer_fixture
 
@@ -2128,6 +2213,8 @@ main() {
     test_installer_plugin_completeness_and_force
     test_installer_darwin_installs_rodin_app_bundle
     test_installer_darwin_prob_phase_unpacks_flat_zip
+    test_installer_darwin_prob_phase_unpacks_wrapped_zip
+    test_installer_prob_phase_rejects_archive_without_probcli
     test_installer_records_resolved_versions
     test_dockerfile_installs_headless_helper
     printf 'PASS: %s\n' "tests/run.sh"
